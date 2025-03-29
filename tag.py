@@ -26,6 +26,8 @@ def process_image(image_path):
         custom_character_tag = os.getenv("custom_character_tag", "").strip()
         # 從環境變數中讀取自訂繪師名稱，預設為空字串，並去除多餘空白
         custom_artist_name = os.getenv("custom_artist_name", "").strip()
+        # 從環境變數中讀取wildcard啟用狀態
+        enable_wildcard = os.getenv("enable_wildcard", "false").lower() == "true"
         
         # 初始化標籤部分
         parts = []
@@ -53,8 +55,15 @@ def process_image(image_path):
         
         # 儲存標籤到對應的 .txt 檔案
         txt_filename = os.path.splitext(image_path)[0] + ".txt"
-        with open(txt_filename, 'w') as txt_file:
-            txt_file.write(text_output)
+        
+        # 判斷是否需要添加 wildcard 行
+        if enable_wildcard and custom_artist_name:
+            wildcard_line = f"an anime girl in {custom_artist_name} style"
+            with open(txt_filename, 'w') as txt_file:
+                txt_file.write(text_output + "\n" + wildcard_line)
+        else:
+            with open(txt_filename, 'w') as txt_file:
+                txt_file.write(text_output)
     except Exception as e:
         print(f"處理 {image_path} 時發生錯誤: {str(e)}")
     

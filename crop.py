@@ -4,7 +4,6 @@ import shutil
 from waifuc.action import ThreeStageSplitAction
 from waifuc.export import SaveExporter
 from waifuc.source import LocalSource
-from imgutils.metrics import lpips_clustering
 from tqdm import tqdm
 
 # 處理單一資料夾的圖片

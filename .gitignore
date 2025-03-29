@@ -51,3 +51,5 @@ Thumbs.db
 
 # 測試目錄
 test/
+lpips_output/
+face_out/
