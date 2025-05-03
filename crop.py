@@ -5,6 +5,8 @@ from waifuc.action import ThreeStageSplitAction
 from waifuc.export import SaveExporter
 from waifuc.source import LocalSource
 from tqdm import tqdm
+import tkinter as tk
+from tkinter import filedialog
 
 # 處理單一資料夾的圖片
 def process_single_folder(input_path, output_path):
@@ -54,12 +56,22 @@ def classify_files_in_directory(directory):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="處理圖片的腳本")
-    parser.add_argument("--input_path", required=True, help="包含圖片的資料夾")
-    parser.add_argument("--output_path", required=True, help="儲存輸出圖片的資料夾")
+    parser.add_argument("--input_path", required=False, help="包含圖片的資料夾")
+    parser.add_argument("--output_path", required=False, help="儲存輸出圖片的資料夾")
     parser.add_argument("--include_subfolders", action='store_true', help="是否包括子資料夾")
     
     args = parser.parse_args()
-    
+
+    # 若未帶入路徑參數，彈出視窗選擇資料夾
+    if args.input_path is None:
+        root = tk.Tk()
+        root.withdraw()
+        args.input_path = filedialog.askdirectory(title="請選擇輸入資料夾")
+    if args.output_path is None:
+        root = tk.Tk()
+        root.withdraw()
+        args.output_path = filedialog.askdirectory(title="請選擇輸出資料夾")
+
     # 確保輸出資料夾存在
     os.makedirs(args.output_path, exist_ok=True)
 
