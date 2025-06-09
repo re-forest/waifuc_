@@ -164,47 +164,42 @@ def upscale_images_in_directory(directory, target_width=1024, target_height=1024
     # 處理每個圖像
     for img_path in tqdm(image_files, desc="放大圖像"):
         try:
-            # 打開圖像
+            # 打開圖像並進行放大處理
             with Image.open(img_path) as img:
-                # 確保圖像模式為RGB
                 if img.mode != 'RGB':
                     img = img.convert('RGB')
-                    
+
                 width, height = img.size
-                
+
                 # 如果設定了最小尺寸閾值，檢查是否需要放大
                 if min_size is not None and width >= min_size and height >= min_size:
                     continue
-                
-                # 記錄開始時間
+
                 start_time = time.time()
-                
-                # 放大並裁剪圖像
+
                 upscaled_img = upscale_and_center_crop(
-                    img, 
-                    target_width=target_width, 
+                    img,
+                    target_width=target_width,
                     target_height=target_height,
                     model=model
                 )
-                
-                # 計算處理時間
-                elapsed_time = time.time() - start_time
-                total_time += elapsed_time
-                
-                # 決定保存路徑
-                if overwrite:
-                    # 覆蓋原圖像
-                    save_path = img_path
-                else:
-                    # 在原目錄添加前綴
-                    base_dir = os.path.dirname(img_path)
-                    base_name = os.path.basename(img_path)
-                    save_path = os.path.join(base_dir, f"upscaled_{base_name}")
-                
-                # 保存圖像
-                upscaled_img.save(save_path)
-                upscaled_count += 1
-                print(f"已放大: {img_path} ({width}x{height} -> {upscaled_img.size[0]}x{upscaled_img.size[1]}) 耗時: {elapsed_time:.2f}秒")
+
+            # 'with' 區塊結束後才寫入檔案，避免在 Windows 系統上覆蓋開啟中的檔案
+            elapsed_time = time.time() - start_time
+            total_time += elapsed_time
+
+            if overwrite:
+                save_path = img_path
+            else:
+                base_dir = os.path.dirname(img_path)
+                base_name = os.path.basename(img_path)
+                save_path = os.path.join(base_dir, f"upscaled_{base_name}")
+
+            upscaled_img.save(save_path)
+            upscaled_count += 1
+            print(
+                f"已放大: {img_path} ({width}x{height} -> {upscaled_img.size[0]}x{upscaled_img.size[1]}) 耗時: {elapsed_time:.2f}秒"
+            )
         except Exception as e:
             print(f"處理 {img_path} 時出錯: {str(e)}")
     
