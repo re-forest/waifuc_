@@ -49,6 +49,12 @@ enable_upscaling=true
 python main.py
 ```
 
+3. 啟動 Gradio 介面：
+
+```bash
+python gradio_app.py
+```
+
 ## 單獨執行各功能模組
 
 除了使用主程式整合所有功能外，也可以單獨執行各個模組：

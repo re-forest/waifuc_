@@ -4,3 +4,4 @@ waifuc[gpu] @ git+https://github.com/deepghs/waifuc.git@main
 python-dotenv==1.1.0
 matplotlib==3.10.1
 boto3==1.37.23
+gradio>=3.0.0
