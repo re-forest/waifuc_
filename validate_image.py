@@ -2,6 +2,16 @@ import os
 from PIL import Image
 from tqdm import tqdm
 
+# 支援的影像格式
+SUPPORTED_EXT = [
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".bmp",
+    ".gif",
+    ".webp",
+]
+
 def validate_and_remove_invalid_images(directory_path):
     """
     驗證目錄中所有圖片的完整性，並刪除無效或損壞的圖片
@@ -18,10 +28,13 @@ def validate_and_remove_invalid_images(directory_path):
         
     files = os.listdir(directory_path)
     removed_count = 0
-    
+
     for filename in tqdm(files, desc="驗證圖片進度"):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
+            ext = os.path.splitext(filename)[-1].lower()
+            if ext not in SUPPORTED_EXT:
+                continue
             try:
                 # 嘗試開啟圖像文件
                 with Image.open(file_path) as img:

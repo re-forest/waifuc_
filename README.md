@@ -132,6 +132,17 @@ python upscale.py [目錄路徑] --width [目標寬度] --height [目標高度] 
 | enable_lpips_clustering | 啟用LPIPS聚類功能 | true |
 | enable_upscaling | 啟用圖片放大功能 | true |
 | num_threads | 使用的執行緒數量 | 2 |
+| lpips_output_directory | LPIPS聚類輸出目錄 | 空 |
+| face_output_directory | 人臉檢測輸出目錄 | 空 |
+| min_face_count | 人臉檢測的最小人臉數量 | 2 |
+| custom_character_tag | 自訂角色標籤 | 空 |
+| custom_artist_name | 自訂繪師名稱 | Pas6telIl98lust |
+| enable_wildcard | 啟用wildcard功能 | true |
+| lpips_batch_size | LPIPS聚類批次處理大小 | 100 |
+| upscale_target_width | 放大後的目標寬度 | 1024 |
+| upscale_target_height | 放大後的目標高度 | 1024 |
+| upscale_model | 放大使用的模型 | HGSR-MHR-anime-aug_X4_320 |
+| upscale_min_size | 最小尺寸閾值 | 800 |
 
 ## 致謝
 
