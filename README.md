@@ -144,6 +144,70 @@ python upscale.py [目錄路徑] --width [目標寬度] --height [目標高度] 
 | upscale_model | 放大使用的模型 | HGSR-MHR-anime-aug_X4_320 |
 | upscale_min_size | 最小尺寸閾值 | 800 |
 
+## Gradio 使用介面
+
+本專案提供基於 Gradio 的 Web UI，可在瀏覽器中操作各項圖像處理功能。啟動介面後會依功能分成多個分頁(Tab)。下列說明每個分頁的用途與操作步驟，並列出預期的資料夾結構以及對應的環境變數預設值。
+
+### 預期的資料夾結構
+
+執行工具前請準備好來源資料夾(`directory`)與輸出資料夾(`output_directory`)。處理後可能會出現以下目錄：
+
+```
+source/               # directory 指定的原始圖片
+processed/            # output_directory，裁切與標籤後的檔案
+processed/head/       # 裁切得到的頭像
+processed/halfbody/   # 裁切得到的半身像
+processed/person/     # 裁切得到的全身像
+face_out/             # 人臉檢測結果，預設由 face_output_directory 指定
+lpips_output/         # LPIPS 聚類結果，預設由 lpips_output_directory 指定
+```
+
+### 各分頁功能與步驟
+
+#### 圖像檢驗
+用途：檢查並移除損壞的圖片。
+步驟：
+1. 在「圖片來源目錄」輸入路徑，預設讀取 `directory`。
+2. 按下「開始驗證」執行，錯誤圖片會自動刪除。
+
+#### 人臉檢測
+用途：依人臉數量分類圖片。
+步驟：
+1. 選擇來源資料夾(預設 `directory`)。
+2. 設定最小人臉數量(`min_face_count`，預設 2)。
+3. 指定輸出位置(`face_output_directory`，預設 `face_out`)。
+4. 點擊「執行」。
+
+#### LPIPS 聚類去重
+用途：以感知相似度分群並移動重複圖片。
+步驟：
+1. 指定待處理資料夾(預設 `directory`)。
+2. 設定輸出資料夾(`lpips_output_directory`，預設 `lpips_output`)。
+3. 調整批次大小(`lpips_batch_size`，預設 100)。
+4. 進行聚類。
+
+#### 自動裁切與分類
+用途：將人物圖片裁切為頭像、半身像與全身像並整理。
+步驟：
+1. 選擇來源資料夾(預設 `directory`)。
+2. 選擇輸出資料夾(`output_directory`)。
+3. 執行後在輸出目錄下產生 `head/`、`halfbody/`、`person/` 等子目錄。
+
+#### 標籤產生
+用途：使用深度模型自動產生圖像標籤檔。
+步驟：
+1. 指定處理目錄，通常為 `output_directory`。
+2. 依需要設定 `custom_character_tag`、`custom_artist_name` 及 `num_threads`。
+3. 執行後會在每張圖片旁建立 `.txt` 標籤檔案。
+
+#### 圖像放大
+用途：對較小的圖片進行超解析度放大。
+步驟：
+1. 選擇要放大的資料夾(預設 `output_directory`)。
+2. 可修改 `upscale_target_width`、`upscale_target_height` 與 `upscale_model` 等參數。
+3. 送出後依設定覆蓋或更新圖片。
+
+
 ## 致謝
 
 本專案基於以下函式庫：
