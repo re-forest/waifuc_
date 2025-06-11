@@ -144,6 +144,13 @@ python upscale.py [目錄路徑] --width [目標寬度] --height [目標高度] 
 | upscale_model | 放大使用的模型 | HGSR-MHR-anime-aug_X4_320 |
 | upscale_min_size | 最小尺寸閾值 | 800 |
 
+
+## Gradio 介面預設值
+
+執行 `gradio_app.py` 可使用圖形介面處理圖片。若 `.env` 檔案中設置了
+`directory` 或 `output_directory` 等環境變數，這些值會自動填入對應的輸入框，
+若未設定則輸入框會顯示如 `/path/to/images` 的提示文字。
+=======
 ## Gradio 使用介面
 
 本專案提供基於 Gradio 的 Web UI，可在瀏覽器中操作各項圖像處理功能。啟動介面後會依功能分成多個分頁(Tab)。下列說明每個分頁的用途與操作步驟，並列出預期的資料夾結構以及對應的環境變數預設值。
