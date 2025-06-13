@@ -31,15 +31,13 @@ def safe_process_single_image(image_path):
         # 檢查檔案是否存在
         if not os.path.isfile(image_path):
             raise ImageProcessingError(f"圖片檔案不存在: {image_path}", image_path)
-        
-        # 檢查檔案是否可讀取
+          # 檢查檔案是否可讀取
         if not os.access(image_path, os.R_OK):
             raise ImageProcessingError(f"無法讀取圖片檔案: {image_path}，請檢查權限", image_path)
         
         try:
             # 使用模型生成圖片的標籤
-            rating, features, chars = get_wd14_tags(image_path, model_name="EVA02_Large")
-        except Exception as e:
+            rating, features, chars = get_wd14_tags(image_path, model_name="EVA02_Large")        except Exception as e:
             error_msg = f"標記模型處理失敗: {str(e)}"
             if ("model" in str(e).lower() or "download" in str(e).lower() or 
                 "onnx" in str(e).lower() or "cuda" in str(e).lower()):
@@ -64,9 +62,7 @@ def safe_process_single_image(image_path):
             
         # 2. 處理繪師名稱 (artist_name)
         if custom_artist_name:
-            parts.append(custom_artist_name)
-            
-        # 3. 處理特徵標籤 (features)
+            parts.append(custom_artist_name)        # 3. 處理特徵標籤 (features)
         # 過濾低於閾值的標籤
         filtered_features = {k: v for k, v in features.items() if v >= threshold}
         feature_tags = tags_to_text(filtered_features)
@@ -78,8 +74,7 @@ def safe_process_single_image(image_path):
         # 檢查 text_output 若有 "1girl," 則移至字串開頭
         if "1girl," in text_output:
             text_output = "1girl," + text_output.replace("1girl,", "")
-        
-        # 儲存標籤到對應的 .txt 檔案
+          # 儲存標籤到對應的 .txt 檔案
         txt_filename = os.path.splitext(image_path)[0] + ".txt"
         
         try:
@@ -94,8 +89,7 @@ def safe_process_single_image(image_path):
         except PermissionError:
             raise ImageProcessingError(f"權限不足，無法寫入標籤檔案: {txt_filename}", image_path)
         except Exception as e:
-            raise ImageProcessingError(f"寫入標籤檔案失敗: {str(e)}", image_path)
-        
+            raise ImageProcessingError(f"寫入標籤檔案失敗: {str(e)}", image_path)        
         logger.debug(f"成功處理圖片: {image_path}")
         return {
             "success": True, 
@@ -238,3 +232,4 @@ if __name__ == "__main__":
     else:
         logger.error("圖片標記處理失敗")
         print("圖片標記處理失敗")
+

@@ -3,6 +3,11 @@ from imgutils.upscale import upscale_with_cdc
 import os
 from tqdm import tqdm
 import time
+from logger_config import get_logger
+from error_handler import safe_execute, DirectoryError, ImageProcessingError, ModelError, WaifucError
+
+# 設定日誌記錄器
+logger = get_logger('upscale')
 
 def upscale_to_target_size(image, target_width=None, target_height=None, model='HGSR-MHR-anime-aug_X4_320', 
                           tile_size=512, tile_overlap=64, batch_size=1, silent=False, preserve_aspect_ratio=True):
@@ -39,17 +44,16 @@ def upscale_to_target_size(image, target_width=None, target_height=None, model='
     
     # 獲取當前尺寸
     current_width, current_height = upscaled_image.size
-    
-    # 計算目標尺寸（處理寬高比）
-    if target_width is None:
+      # 計算目標尺寸（處理寬高比）
+    if target_width is None and target_height is not None:
         # 只指定了目標高度，按比例計算寬度
         scale = target_height / current_height
         target_width = int(current_width * scale)
-    elif target_height is None:
+    elif target_height is None and target_width is not None:
         # 只指定了目標寬度，按比例計算高度
         scale = target_width / current_width
         target_height = int(current_height * scale)
-    elif preserve_aspect_ratio:
+    elif preserve_aspect_ratio and target_width is not None and target_height is not None:
         # 同時指定了寬高，但需要保持比例
         # 計算哪個維度是限制因素（確保寬高都至少達到目標值）
         width_scale = target_width / current_width
@@ -60,9 +64,22 @@ def upscale_to_target_size(image, target_width=None, target_height=None, model='
         target_width = int(current_width * scale)
         target_height = int(current_height * scale)
     
-    # 如果目標尺寸小於當前尺寸，使用LANCZOS採樣方式（適合縮小）
+    # 確保 target_width 和 target_height 都有值
+    if target_width is None or target_height is None:
+        raise ValueError("無法計算目標尺寸")
+      # 如果目標尺寸小於當前尺寸，使用LANCZOS採樣方式（適合縮小）
     # 如果目標尺寸大於當前尺寸，使用BICUBIC採樣方式（適合放大）
-    resample_method = Image.LANCZOS if (target_width < current_width or target_height < current_height) else Image.BICUBIC
+    try:
+        # PIL 10.0.0+ 使用 Image.Resampling.LANCZOS
+        from PIL import Image as PILImage
+        resample_lanczos = PILImage.Resampling.LANCZOS
+        resample_bicubic = PILImage.Resampling.BICUBIC
+    except (AttributeError, ImportError):
+        # 較舊版本的 PIL 或其他情況，使用數值常數
+        resample_lanczos = 1  # LANCZOS
+        resample_bicubic = 3  # BICUBIC
+    
+    resample_method = resample_lanczos if (target_width < current_width or target_height < current_height) else resample_bicubic
     
     # 調整到目標尺寸
     resized_image = upscaled_image.resize((target_width, target_height), resample=resample_method)
@@ -114,6 +131,93 @@ def upscale_and_center_crop(image, target_width, target_height, model='HGSR-MHR-
     
     return cropped_image
 
+def safe_upscale_single_image(img_path, target_width, target_height, model, overwrite, min_size):
+    """
+    安全放大單一圖片
+    
+    Args:
+        img_path (str): 圖片檔案路徑
+        target_width (int): 目標寬度
+        target_height (int): 目標高度  
+        model (str): 使用的模型
+        overwrite (bool): 是否覆蓋原檔案
+        min_size (int, optional): 最小尺寸閾值
+    
+    Returns:
+        dict: 包含處理結果的字典
+    
+    Raises:        ImageProcessingError: 當圖片處理失敗時
+        ModelError: 當模型執行失敗時
+    """
+    try:
+        start_time = time.time()
+        upscaled_img = None
+        width = height = 0
+        
+        img = Image.open(img_path)
+        try:
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+
+            width, height = img.size
+
+            # 如果設定了最小尺寸閾值，檢查是否需要放大
+            if min_size is not None and width >= min_size and height >= min_size:
+                return {"skipped": True, "reason": "size_threshold", "original_size": (width, height)}
+
+            try:
+                upscaled_img = upscale_and_center_crop(
+                    img,
+                    target_width=target_width,
+                    target_height=target_height,
+                    model=model
+                )
+            except Exception as e:
+                error_msg = f"放大處理失敗: {str(e)}"
+                if "model" in str(e).lower() or "cuda" in str(e).lower() or "memory" in str(e).lower():
+                    raise ModelError(error_msg, model)
+                else:
+                    raise ImageProcessingError(error_msg, img_path)
+        finally:
+            img.close()  # 手動關閉圖像
+            
+        # 確保upscaled_img存在
+        if upscaled_img is None:
+            raise ImageProcessingError("圖像放大失敗", img_path)
+            
+        elapsed_time = time.time() - start_time
+
+        if overwrite:
+            save_path = img_path
+        else:
+            base_dir = os.path.dirname(img_path)
+            base_name = os.path.basename(img_path)
+            save_path = os.path.join(base_dir, f"upscaled_{base_name}")
+
+        try:
+            upscaled_img.save(save_path)
+        except PermissionError:
+            raise ImageProcessingError(f"權限不足，無法儲存檔案到 '{save_path}'", img_path)
+        except Exception as e:
+            raise ImageProcessingError(f"儲存檔案失敗: {str(e)}", img_path)
+        
+        return {
+            "success": True,
+            "original_size": (width, height),
+            "new_size": upscaled_img.size,
+            "elapsed_time": elapsed_time,
+            "save_path": save_path
+        }
+        
+    except (ImageProcessingError, ModelError):
+        raise
+    except FileNotFoundError:
+        raise ImageProcessingError(f"圖片檔案不存在: {img_path}", img_path)
+    except PermissionError:
+        raise ImageProcessingError(f"權限不足，無法讀取圖片檔案: {img_path}", img_path)
+    except Exception as e:
+        raise ImageProcessingError(f"處理圖片時發生未預期的錯誤: {str(e)}", img_path)
+
 def upscale_images_in_directory(directory, target_width=1024, target_height=1024, 
                                 model='HGSR-MHR-anime-aug_X4_320', overwrite=True,
                                 min_size=None, recursive=True):
@@ -131,10 +235,19 @@ def upscale_images_in_directory(directory, target_width=1024, target_height=1024
     
     Returns:
         tuple: (處理的圖像數, 放大的圖像數)
+    
+    Raises:
+        DirectoryError: 當目錄不存在或無法存取時
+        WaifucError: 當處理過程中發生其他錯誤時
     """
+    logger.info(f"開始圖片放大處理: 目錄={directory}, 目標尺寸={target_width}x{target_height}, 模型={model}")
+    
+    # 驗證目錄
     if not os.path.isdir(directory):
-        print(f"錯誤: 目錄 '{directory}' 不存在或不是有效目錄")
-        return 0, 0
+        raise DirectoryError(f"目錄 '{directory}' 不存在或不是有效目錄", directory)
+    
+    if not os.access(directory, os.R_OK):
+        raise DirectoryError(f"無法讀取目錄 '{directory}'，請檢查權限", directory)
     
     # 支援的圖像格式
     supported_formats = ['.jpg', '.jpeg', '.png', '.bmp', '.webp']
@@ -142,69 +255,71 @@ def upscale_images_in_directory(directory, target_width=1024, target_height=1024
     # 收集需要處理的圖像
     image_files = []
     
-    if recursive:
-        # 遞迴處理所有子目錄
-        for root, _, files in os.walk(directory):
-            for file in files:
-                if any(file.lower().endswith(ext) for ext in supported_formats):
-                    image_files.append(os.path.join(root, file))
-    else:
-        # 只處理當前目錄
-        for file in os.listdir(directory):
-            if os.path.isfile(os.path.join(directory, file)) and any(file.lower().endswith(ext) for ext in supported_formats):
-                image_files.append(os.path.join(directory, file))
-    
+    try:
+        if recursive:
+            # 遞迴處理所有子目錄
+            for root, _, files in os.walk(directory):
+                for file in files:
+                    if any(file.lower().endswith(ext) for ext in supported_formats):
+                        image_files.append(os.path.join(root, file))
+        else:
+            # 只處理當前目錄
+            for file in os.listdir(directory):
+                file_path = os.path.join(directory, file)
+                if os.path.isfile(file_path) and any(file.lower().endswith(ext) for ext in supported_formats):
+                    image_files.append(file_path)
+    except PermissionError:
+        raise DirectoryError(f"權限不足，無法列舉目錄 '{directory}' 中的檔案", directory)
+    except Exception as e:
+        raise WaifucError(f"列舉目錄檔案時發生錯誤: {str(e)}")
+
     if not image_files:
+        logger.warning(f"在目錄 '{directory}' 中未找到支援的圖像文件")
         print(f"在目錄 '{directory}' 中未找到支援的圖像文件")
         return 0, 0
-    
+
     upscaled_count = 0
+    skipped_count = 0
     total_time = 0
     
+    logger.info(f"找到 {len(image_files)} 個圖片檔案")
+
     # 處理每個圖像
     for img_path in tqdm(image_files, desc="放大圖像"):
-        try:
-            # 打開圖像並進行放大處理
-            with Image.open(img_path) as img:
-                if img.mode != 'RGB':
-                    img = img.convert('RGB')
-
-                width, height = img.size
-
-                # 如果設定了最小尺寸閾值，檢查是否需要放大
-                if min_size is not None and width >= min_size and height >= min_size:
-                    continue
-
-                start_time = time.time()
-
-                upscaled_img = upscale_and_center_crop(
-                    img,
-                    target_width=target_width,
-                    target_height=target_height,
-                    model=model
-                )
-
-            # 'with' 區塊結束後才寫入檔案，避免在 Windows 系統上覆蓋開啟中的檔案
-            elapsed_time = time.time() - start_time
-            total_time += elapsed_time
-
-            if overwrite:
-                save_path = img_path
-            else:
-                base_dir = os.path.dirname(img_path)
-                base_name = os.path.basename(img_path)
-                save_path = os.path.join(base_dir, f"upscaled_{base_name}")
-
-            upscaled_img.save(save_path)
+        result = safe_execute(
+            safe_upscale_single_image,
+            img_path,
+            target_width,
+            target_height,
+            model,
+            overwrite,
+            min_size,
+            logger=logger,
+            default_return=None,
+            error_msg_prefix=f"處理圖片 {os.path.basename(img_path)} 時"
+        )
+        
+        if result is None:
+            continue
+        
+        if result.get("skipped"):
+            skipped_count += 1
+            logger.debug(f"跳過圖片 {img_path}: {result.get('reason')}")
+        elif result.get("success"):
             upscaled_count += 1
-            print(
-                f"已放大: {img_path} ({width}x{height} -> {upscaled_img.size[0]}x{upscaled_img.size[1]}) 耗時: {elapsed_time:.2f}秒"
-            )
-        except Exception as e:
-            print(f"處理 {img_path} 時出錯: {str(e)}")
+            total_time += result.get("elapsed_time", 0)
+            original_size = result.get("original_size")
+            new_size = result.get("new_size")
+            elapsed_time = result.get("elapsed_time", 0)
+            
+            logger.info(f"已放大: {img_path} ({original_size[0]}x{original_size[1]} -> {new_size[0]}x{new_size[1]}) 耗時: {elapsed_time:.2f}秒")
+            print(f"已放大: {img_path} ({original_size[0]}x{original_size[1]} -> {new_size[0]}x{new_size[1]}) 耗時: {elapsed_time:.2f}秒")
     
     avg_time = total_time / upscaled_count if upscaled_count > 0 else 0
-    print(f"共處理 {len(image_files)} 張圖像，放大 {upscaled_count} 張圖像")
+    logger.info(f"共處理 {len(image_files)} 張圖像，放大 {upscaled_count} 張圖像，跳過 {skipped_count} 張圖像")
+    logger.info(f"總耗時: {total_time:.2f}秒，平均每張圖像處理時間: {avg_time:.2f}秒")
+    
+    print(f"共處理 {len(image_files)} 張圖像，放大 {upscaled_count} 張圖像，跳過 {skipped_count} 張圖像")
     print(f"總耗時: {total_time:.2f}秒，平均每張圖像處理時間: {avg_time:.2f}秒")
     
     return len(image_files), upscaled_count
