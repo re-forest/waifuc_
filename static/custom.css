@@ -1,0 +1,39 @@
+/* 自定義 CSS 以解決字體載入問題 */
+:root {
+    --font-family-primary: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-family-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+}
+
+/* 禁用外部字體載入 */
+@font-face {
+    font-family: 'ui-sans-serif';
+    src: local('Arial'), local('Helvetica');
+    font-display: swap;
+}
+
+@font-face {
+    font-family: 'system-ui';
+    src: local('Arial'), local('Helvetica');
+    font-display: swap;
+}
+
+/* 確保所有文本使用系統字體 */
+* {
+    font-family: var(--font-family-primary) !important;
+}
+
+/* 隱藏可能的錯誤消息 */
+.error-message {
+    display: none !important;
+}
+
+/* 優化載入體驗 */
+body {
+    font-family: var(--font-family-primary);
+    background-color: #f8f9fa;
+}
+
+/* Gradio 特定樣式 */
+.gradio-container {
+    font-family: var(--font-family-primary) !important;
+}

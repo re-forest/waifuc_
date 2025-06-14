@@ -58,14 +58,14 @@ def move_image_to_output(file_path, output_folder, face_count):
     
     Args:
         file_path (str): 原始檔案路徑
-        output_folder (str): 輸出基礎目錄
+        output_folder (str): 輸出基礎目錄（已包含來源目錄名稱）
         face_count (int): 人臉數量
     
     Returns:
         bool: 移動是否成功
     """
     try:
-        # 根據人臉數量創建資料夾
+        # 根據實際人臉數量創建資料夾（不限制最大值）
         target_folder = os.path.join(output_folder, f"faces_{face_count}")
         ensure_output_directory(target_folder)
         
@@ -92,8 +92,7 @@ def detect_faces_in_directory(directory, min_face_count=1, output_base_folder="f
     
     Raises:
         DirectoryError: 當目錄不存在或無法存取時
-        WaifucError: 當處理過程中發生其他錯誤時
-    """
+        WaifucError: 當處理過程中發生其他錯誤時    """
     logger.info(f"開始人臉檢測: 目錄={directory}, 最小人臉數={min_face_count}, 輸出目錄={output_base_folder}")
     
     # 驗證輸入目錄
@@ -103,8 +102,17 @@ def detect_faces_in_directory(directory, min_face_count=1, output_base_folder="f
     if not os.access(directory, os.R_OK):
         raise DirectoryError(f"無法讀取目錄 '{directory}'，請檢查權限", directory)
     
-    # 確保輸出基礎目錄存在
-    ensure_output_directory(output_base_folder)
+    # 創建基於來源目錄名稱的輸出目錄
+    source_dir_name = os.path.basename(directory.rstrip(os.sep))
+    source_output_folder = os.path.join(output_base_folder, source_dir_name)
+    
+    # 確保輸出目錄存在
+    ensure_output_directory(source_output_folder)
+    source_dir_name = os.path.basename(directory.rstrip(os.sep))
+    source_output_folder = os.path.join(output_base_folder, source_dir_name)
+    
+    # 確保輸出目錄存在
+    ensure_output_directory(source_output_folder)
     
     # 取得所有圖片檔案
     try:
@@ -145,7 +153,7 @@ def detect_faces_in_directory(directory, min_face_count=1, output_base_folder="f
                 move_success = safe_execute(
                     move_image_to_output,
                     file_path,
-                    output_base_folder,
+                    source_output_folder,  # 使用基於來源的輸出目錄
                     face_count,
                     logger=logger,
                     default_return=False,
