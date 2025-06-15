@@ -1,226 +1,95 @@
-import os
 import sys
-import shutil
-from concurrent.futures import ProcessPoolExecutor
-from dotenv import load_dotenv
-from matplotlib import pyplot as plt
-from tqdm import tqdm
+import os
+import logging # 導入標準 logging 模組
 
-# 導入日誌系統
-from logger_config import get_logger
+# --- 設定 Python Path ---
+# 確保專案根目錄 (waifuc_) 在 sys.path 中，以便進行絕對導入
+# __file__ 是 waifuc_/main.py
+# current_dir 是 waifuc_
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+# --- 設定 Python Path 結束 ---
 
-# 從本地模組導入功能
-from validate_image import validate_and_remove_invalid_images
-from face_detection import detect_faces_in_directory
-from lpips_clustering import process_lpips_clustering
-from crop import classify_files_in_directory, process_single_folder
-from tag import tag_image
-from upscale import upscale_images_in_directory
+# 現在可以安全地從專案內部導入模組
+try:
+    from config import settings
+    from ui.app import create_ui
+    from utils.logger_config import setup_logging
+    from utils.error_handler import handle_exception
+except ImportError as e:
+    print(f"Error importing modules: {e}")
+    print("Please ensure that the project structure is correct and all __init__.py files are in place.")
+    print(f"Current sys.path: {sys.path}")
+    sys.exit(1)
 
-def main():
-    """主程式執行流程"""
-    # 初始化日誌系統
-    logger = get_logger('main')
-    
+# 全局 logger 實例
+# 注意：logger 的初始化需要在 settings 模組成功導入之後
+main_logger = None
+
+def initialize_global_services():
+    global main_logger
+    # 初始化主日誌記錄器
+    main_logger = setup_logging(
+        module_name="app_main", # 或者 settings.APP_NAME
+        log_dir=settings.LOG_DIR,
+        log_level_str=settings.LOG_LEVEL,
+        max_bytes=settings.LOG_ROTATION_MAX_BYTES,
+        backup_count=settings.LOG_ROTATION_BACKUP_COUNT
+    )
+    main_logger.info(f"日誌系統初始化完成。日誌級別: {settings.LOG_LEVEL}, 日誌目錄: {settings.LOG_DIR}")
+
+    # 設定全域未捕獲異常處理器
+    # lambda 函數會捕獲定義時的 main_logger
+    sys.excepthook = lambda exc_type, exc_value, exc_traceback: \
+        handle_exception(exc_type, exc_value, exc_traceback, main_logger, "Global Unhandled Exception")
+    main_logger.info("全域異常處理器已設定。")
+
+def start_application():
+    if not main_logger:
+        print("Error: Logger not initialized. Call initialize_global_services() first.")
+        # 嘗試進行一次初始化
+        try:
+            initialize_global_services()
+            if not main_logger: # 再次檢查
+                 print("Logger initialization failed. Exiting.")
+                 sys.exit(1)
+        except Exception as e:
+            print(f"Critical error during logger initialization: {e}")
+            sys.exit(1)
+
+    main_logger.info(f"準備啟動 {settings.GRADIO_TITLE}...")
     try:
-        # 從.env檔案中讀取設定
-        load_dotenv()
-        logger.info("成功載入環境變數設定")
+        app_ui = create_ui() # create_ui 應使用 settings 中的配置
         
-        # 檔案路徑
-        directory = os.getenv("directory")
-        logger.debug(f"從環境變數讀取的目錄: {directory}")
-        
-        if not directory or not os.path.isdir(directory):
-            error_msg = f"目錄 '{directory}' 不存在或不是有效目錄"
-            logger.error(error_msg)
-            print(f"錯誤: {error_msg}")
-            return 1
+        main_logger.info(f"Gradio 應用程式即將在 {settings.GRADIO_SERVER_NAME}:{settings.GRADIO_SERVER_PORT} 啟動。")
+        if settings.GRADIO_SHARE:
+            main_logger.info("Gradio 'share' 功能已啟用。將生成公開鏈接。")
 
-        logger.info(f"開始處理目錄: {directory}")
-        print(f"開始處理目錄: {directory}")
-        
-        # 驗證圖片完整性
-        # 目的: 移除損壞或不完整的圖像，確保後續處理不會因為圖像問題而中斷
-        if os.getenv("enable_validation", "true").lower() == "true":
-            logger.info("開始執行圖片驗證步驟")
-            print("------- 開始驗證圖片完整性 -------")
-            try:
-                validate_and_remove_invalid_images(directory)
-                logger.info("圖片驗證步驟完成")
-            except Exception as e:
-                logger.error(f"圖片驗證過程中發生錯誤: {str(e)}", exc_info=True)
-                print(f"警告: 圖片驗證過程中發生錯誤: {str(e)}")
-        else:
-            logger.info("圖片驗證步驟已跳過（根據環境變數設定）")
-        
-        # 人臉檢測
-        # 目的: 篩選出單一人臉的圖像，這對於訓練生成特定人物的AI模型非常重要
-        # 單一人臉的圖像能讓模型更專注於學習特定人物特徵，避免多人圖像造成的特徵混淆
-        if os.getenv("enable_face_detection", "true").lower() == "true":
-            logger.info("開始執行人臉檢測步驟")
-            print("------- 開始人臉檢測 -------")
-            try:
-                min_face_count = int(os.getenv("min_face_count", 1))  # 預設最小人臉數量為 1
-                face_output_directory = os.getenv("face_output_directory", "face_out")  # 從環境變數讀取輸出目錄
-                logger.debug(f"人臉檢測參數 - 最小人臉數量: {min_face_count}, 輸出目錄: {face_output_directory}")
-                detect_faces_in_directory(directory, min_face_count, face_output_directory)
-                logger.info("人臉檢測步驟完成")
-            except Exception as e:
-                logger.error(f"人臉檢測過程中發生錯誤: {str(e)}", exc_info=True)
-                print(f"警告: 人臉檢測過程中發生錯誤: {str(e)}")
-        else:
-            logger.info("人臉檢測步驟已跳過（根據環境變數設定）")
-          # 重新取得資料夾內所有檔案路徑 
-        file_paths = [os.path.join(directory, f) for f in os.listdir(directory) 
-                     if os.path.isfile(os.path.join(directory, f))]
-        logger.debug(f"在目錄中找到 {len(file_paths)} 個檔案")
-        
-        # 圖片去重複
-        # 目的: 通過LPIPS聚類找出相似的圖像，避免訓練資料中存在過多相似圖片
-        # 相似度過高的圖像不僅浪費訓練資源，還可能導致模型過度擬合某些特定場景
-        if os.getenv("enable_lpips_clustering", "true").lower() == "true":
-            logger.info("開始執行 LPIPS 圖片去重複步驟")
-            print("------- 開始圖片去重複 -------")
-            try:
-                lpips_output_directory = os.getenv("lpips_output_directory", "lpips_output")
-                lpips_batch_size = int(os.getenv("lpips_batch_size", 100))
-                logger.debug(f"LPIPS 參數 - 輸出目錄: {lpips_output_directory}, 批次大小: {lpips_batch_size}")
-                
-                print(f"圖片去重複設定 - 輸出目錄: {lpips_output_directory}, 批次大小: {lpips_batch_size}")
-                lpips_result_dir = process_lpips_clustering(file_paths, lpips_output_directory, lpips_batch_size)
-                logger.info(f"LPIPS 圖片去重複完成，結果保存在: {lpips_result_dir}")
-                print(f"圖片去重複處理完成，結果保存在: {lpips_result_dir}")
-            except Exception as e:
-                logger.error(f"LPIPS 去重複過程中發生錯誤: {str(e)}", exc_info=True)
-                print(f"警告: LPIPS 去重複過程中發生錯誤: {str(e)}")
-        else:
-            logger.info("LPIPS 圖片去重複步驟已跳過（根據環境變數設定）")
-        
-        # 裁切檔案
-        # 目的: 自動將人物圖像切割成全身像、半身像和頭像，使模型可以從不同尺度學習人物特徵
-        # 多尺度學習可以顯著提升模型對人物特徵的理解和生成能力
-        if os.getenv("enable_cropping", "true").lower() == "true":
-            logger.info("開始執行圖片裁切步驟")
-            print("------- 開始裁切圖片 -------")
-            try:
-                output_directory = os.getenv("output_directory")
-                if not output_directory:
-                    output_directory = os.path.join(os.path.dirname(directory), "cropped")
-                    logger.warning(f"未設定 output_directory 環境變數，使用預設值: {output_directory}")
-                    print("警告: 未設定 output_directory 環境變數，使用預設值")
-                
-                logger.debug(f"圖片裁切參數 - 輸出目錄: {output_directory}")
-                process_single_folder(directory, output_directory)
-                logger.info("圖片裁切步驟完成")
-            except Exception as e:
-                logger.error(f"圖片裁切過程中發生錯誤: {str(e)}", exc_info=True)
-                print(f"警告: 圖片裁切過程中發生錯誤: {str(e)}")
-            
-            process_single_folder(directory, output_directory)
-        
-        # 檔案分類
-        # 目的: 將裁切後的圖像分類到不同資料夾，便於後續處理和訓練
-        # 分類後的資料結構更清晰，也便於針對不同類型圖像應用不同處理策略        # 檔案分類
-        # 目的: 將裁切後的圖像分類到不同資料夾，便於後續處理和訓練
-        # 分類後的資料結構更清晰，也便於針對不同類型圖像應用不同處理策略
-        if os.getenv("enable_classification", "true").lower() == "true":
-            logger.info("開始執行圖片分類步驟")
-            print("------- 開始分類圖片 -------")
-            try:
-                output_directory = os.getenv("output_directory")
-                if not output_directory:
-                    logger.warning("未設定 output_directory 環境變數，跳過分類步驟")
-                    print("警告: 未設定 output_directory 環境變數，跳過分類步驟")
-                else:
-                    logger.debug(f"圖片分類參數 - 目錄: {output_directory}")
-                    classify_files_in_directory(output_directory)
-                    logger.info("圖片分類步驟完成")
-            except Exception as e:
-                logger.error(f"圖片分類過程中發生錯誤: {str(e)}", exc_info=True)
-                print(f"警告: 圖片分類過程中發生錯誤: {str(e)}")
-        else:
-            logger.info("圖片分類步驟已跳過（根據環境變數設定）")
-
-        # 放大圖片
-        # 目的: 對低解析度圖像進行超解析度處理，提高整體資料集的品質
-        # 高品質的訓練資料能夠讓模型學習到更細緻的特徵，提升生成結果的品質
-        if os.getenv("enable_upscaling", "true").lower() == "true":
-            logger.info("開始執行圖片放大步驟")
-            print("------- 開始放大圖片 -------")
-            try:
-                output_directory = os.getenv("output_directory")
-                if not output_directory:
-                    logger.warning("未設定 output_directory 環境變數，跳過放大步驟")
-                    print("警告: 未設定 output_directory 環境變數，跳過放大步驟")
-                else:
-                    target_width = int(os.getenv("upscale_target_width", 1024))
-                    target_height = int(os.getenv("upscale_target_height", 1024))
-                    upscale_model = os.getenv("upscale_model", "HGSR-MHR-anime-aug_X4_320")
-                    min_size = int(os.getenv("upscale_min_size", 800)) if os.getenv("upscale_min_size") else None
-                    
-                    logger.debug(f"放大參數 - 目標尺寸: {target_width}x{target_height}, 模型: {upscale_model}, 最小尺寸: {min_size}")
-                    print(f"放大設定 - 目標尺寸: {target_width}x{target_height}, 模型: {upscale_model}")
-                    if min_size:
-                        print(f"只處理小於 {min_size}x{min_size} 的圖片")
-                        
-                    upscale_images_in_directory(
-                        output_directory,
-                        target_width=target_width,
-                        target_height=target_height,
-                        model=upscale_model,
-                        overwrite=True,
-                        min_size=min_size,
-                        recursive=True
-                    )
-                    logger.info("圖片放大步驟完成")
-            except Exception as e:
-                logger.error(f"圖片放大過程中發生錯誤: {str(e)}", exc_info=True)
-                print(f"警告: 圖片放大過程中發生錯誤: {str(e)}")
-        else:
-            logger.info("圖片放大步驟已跳過（根據環境變數設定）")
-        
-        # 標記圖片
-        # 目的: 自動為每張圖像生成描述性標籤，用於條件式生成模型的訓練
-        # 這些標籤可以幫助模型學習圖像內容與文字描述之間的關聯，提升控制生成結果的能力
-        if os.getenv("enable_tagging", "true").lower() == "true":
-            logger.info("開始執行圖片標記步驟")
-            print("------- 開始標記圖片 -------")
-            try:
-                output_directory = os.getenv("output_directory")
-                if not output_directory:
-                    logger.warning("未設定 output_directory 環境變數，跳過標記步驟")
-                    print("警告: 未設定 output_directory 環境變數，跳過標記步驟")
-                else:
-                    logger.debug(f"圖片標記參數 - 目錄: {output_directory}")
-                    tag_image(output_directory)
-                    logger.info("圖片標記步驟完成")
-            except Exception as e:
-                logger.error(f"圖片標記過程中發生錯誤: {str(e)}", exc_info=True)
-                print(f"警告: 圖片標記過程中發生錯誤: {str(e)}")
-        else:
-            logger.info("圖片標記步驟已跳過（根據環境變數設定）")
-            logger.info("所有處理步驟已完成")
-        print("所有處理已完成!")
-        return 0
-        
+        app_ui.launch(
+            server_name=settings.GRADIO_SERVER_NAME,
+            server_port=settings.GRADIO_SERVER_PORT,
+            share=settings.GRADIO_SHARE,
+            # prevent_thread_lock=True # 在 Windows 上如果遇到問題可以嘗試啟用
+        )
+        main_logger.info("Gradio 應用程式已成功關閉。") # launch() 是阻塞的，這行在關閉後執行
+    except ImportError as e:
+        # 這種錯誤通常在 create_ui 內部發生，如果 ui.app 又嘗試導入但路徑有問題
+        main_logger.error(f"導入錯誤導致 Gradio 啟動失敗: {e}", exc_info=True)
+        print(f"Import error during Gradio UI creation or launch: {e}")
     except Exception as e:
-        logger.critical(f"主程式執行過程中發生嚴重錯誤: {str(e)}", exc_info=True)
-        print(f"嚴重錯誤: {str(e)}")
-        return 1
-    finally:
-        logger.info("程式結束")
+        main_logger.error(f"啟動 Gradio 應用程式時發生未預期錯誤: {e}", exc_info=True)
+        # 也可以使用 handle_exception，但此處 logger 已捕獲
+        # handle_exception(type(e), e, e.__traceback__, main_logger, "Gradio Launch Error")
+        print(f"An unexpected error occurred while starting the Gradio application: {e}")
 
 if __name__ == "__main__":
     try:
-        sys.exit(main())
-    except KeyboardInterrupt:
-        logger = get_logger('main')
-        logger.warning("程式被使用者中斷")
-        print("\n程式被使用者中斷")
-        sys.exit(1)
+        initialize_global_services() # 首先初始化日誌和全域異常處理
+        start_application()          # 然後啟動應用程式
     except Exception as e:
-        logger = get_logger('main')
-        logger.critical(f"程式執行失敗: {str(e)}", exc_info=True)
-        print(f"\n執行過程中發生錯誤: {str(e)}")
-        sys.exit(1)
+        # 這是最後的防線，如果 initialize_global_services 本身出錯且未被捕獲
+        print(f"CRITICAL ERROR in main execution: {e}")
+        if main_logger: # 如果 logger 初始化成功了，嘗試記錄
+            main_logger.critical(f"CRITICAL ERROR in main execution: {e}", exc_info=True)
+        sys.exit(1) # 嚴重錯誤，退出

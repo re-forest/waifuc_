@@ -5,68 +5,71 @@ import unittest
 import os
 import tempfile
 import shutil
+import logging
 from unittest.mock import patch, MagicMock
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from error_handler import (
-    WaifucError, DirectoryError, ImageProcessingError, ModelError, ConfigurationError,
-    safe_execute, validate_directory, get_user_friendly_error_message
+from utils.error_handler import (
+    WaifucBaseError, DirectoryError, ImageProcessingError, ModelError, ConfigError,
+    safe_execute, handle_exception
 )
-from tests.test_base import (
-    setup_test_environment, teardown_test_environment,
-    create_test_directory_structure, mock_env_vars
-)
+from utils.logger_config import setup_logging
 
 
 class TestWaifucExceptions(unittest.TestCase):
     """測試自定義異常類別"""
     
-    def test_waifuc_error_basic(self):
-        """測試基礎 WaifucError"""
-        error = WaifucError("測試錯誤")
-        self.assertEqual(str(error), "測試錯誤")
-        self.assertEqual(error.error_code, "WAIFUC_ERROR")
-        self.assertEqual(error.details, {})
+    def test_waifuc_base_error_basic(self):
+        """測試基礎 WaifucBaseError"""
+        error = WaifucBaseError("測試錯誤")
+        self.assertEqual(str(error), "WaifucBaseError: 測試錯誤")
+        self.assertEqual(error.message, "測試錯誤")
+        self.assertIsNone(error.context)
     
-    def test_waifuc_error_with_code_and_details(self):
-        """測試帶有錯誤代碼和詳情的 WaifucError"""
-        details = {"file": "test.jpg", "line": 42}
-        error = WaifucError("測試錯誤", "TEST_ERROR", details)
-        self.assertEqual(error.error_code, "TEST_ERROR")
-        self.assertEqual(error.details, details)
+    def test_waifuc_base_error_with_context(self):
+        """測試帶有上下文的 WaifucBaseError"""
+        context = {"file": "test.jpg", "line": 42}
+        error = WaifucBaseError("測試錯誤", context)
+        self.assertEqual(error.message, "測試錯誤")
+        self.assertEqual(error.context, context)
+        self.assertIn("Context:", str(error))
     
     def test_directory_error(self):
         """測試 DirectoryError"""
-        path = "/nonexistent/path"
-        error = DirectoryError("目錄不存在", path)
-        self.assertEqual(error.error_code, "DIR_ERROR")
-        self.assertEqual(error.path, path)
-        self.assertEqual(error.details["path"], path)
+        error = DirectoryError("目錄不存在", {"path": "/nonexistent/path"})
+        self.assertIsInstance(error, WaifucBaseError)
+        self.assertEqual(error.message, "目錄不存在")
+        self.assertIsNotNone(error.context)
+        if error.context is not None:  # 類型保護
+            self.assertEqual(error.context["path"], "/nonexistent/path")
     
     def test_image_processing_error(self):
         """測試 ImageProcessingError"""
-        image_path = "corrupted.jpg"
-        error = ImageProcessingError("圖像處理失敗", image_path)
-        self.assertEqual(error.error_code, "IMG_PROC_ERROR")
-        self.assertEqual(error.image_path, image_path)
-        self.assertEqual(error.details["image_path"], image_path)
+        error = ImageProcessingError("圖像處理失敗", {"image_path": "corrupted.jpg"})
+        self.assertIsInstance(error, WaifucBaseError)
+        self.assertEqual(error.message, "圖像處理失敗")
+        self.assertIsNotNone(error.context)
+        if error.context is not None:  # 類型保護
+            self.assertEqual(error.context["image_path"], "corrupted.jpg")
     
     def test_model_error(self):
         """測試 ModelError"""
-        model_name = "test_model"
-        error = ModelError("模型載入失敗", model_name)
-        self.assertEqual(error.error_code, "MODEL_ERROR")
-        self.assertEqual(error.model_name, model_name)
-        self.assertEqual(error.details["model_name"], model_name)
+        error = ModelError("模型載入失敗", {"model_name": "test_model"})
+        self.assertIsInstance(error, WaifucBaseError)
+        self.assertEqual(error.message, "模型載入失敗")
+        self.assertIsNotNone(error.context)
+        if error.context is not None:  # 類型保護
+            self.assertEqual(error.context["model_name"], "test_model")
     
-    def test_configuration_error(self):
-        """測試 ConfigurationError"""
-        config_key = "test_setting"
-        error = ConfigurationError("配置錯誤", config_key)
-        self.assertEqual(error.error_code, "CONFIG_ERROR")
-        self.assertEqual(error.config_key, config_key)
-        self.assertEqual(error.details["config_key"], config_key)
+    def test_config_error(self):
+        """測試 ConfigError"""
+        error = ConfigError("配置錯誤", {"config_key": "test_setting"})
+        self.assertIsInstance(error, WaifucBaseError)
+        self.assertEqual(error.message, "配置錯誤")
+        self.assertIsNotNone(error.context)
+        if error.context is not None:  # 類型保護
+            self.assertEqual(error.context["config_key"], "test_setting")
 
 
 class TestSafeExecute(unittest.TestCase):
@@ -74,11 +77,7 @@ class TestSafeExecute(unittest.TestCase):
     
     def setUp(self):
         """設定測試環境"""
-        self.test_dir = setup_test_environment()
-    
-    def tearDown(self):
-        """清理測試環境"""
-        teardown_test_environment()
+        self.test_logger = setup_logging(__name__, 'test_logs', log_level_str='DEBUG')
     
     def test_safe_execute_success(self):
         """測試成功執行的情況"""
@@ -96,128 +95,138 @@ class TestSafeExecute(unittest.TestCase):
         result = safe_execute(function_with_kwargs, 3, b=7)
         self.assertEqual(result, 21)
     
-    def test_safe_execute_waifuc_error(self):
-        """測試處理 WaifucError"""
-        def function_with_waifuc_error():
-            raise WaifucError("測試錯誤", "TEST_ERROR")
+    def test_safe_execute_with_exception(self):
+        """測試處理異常"""
+        def function_with_error():
+            raise ValueError("測試錯誤")
         
-        with patch('error_handler.error_logger') as mock_logger:
-            result = safe_execute(function_with_waifuc_error, default_return="default")
-            self.assertEqual(result, "default")
-            mock_logger.error.assert_called_once()
+        mock_logger = MagicMock()
+        result = safe_execute(
+            function_with_error, 
+            logger=mock_logger,
+            default_return="default"
+        )
+        self.assertEqual(result, "default")
+        mock_logger.error.assert_called_once()
     
     def test_safe_execute_file_not_found(self):
         """測試處理 FileNotFoundError"""
         def function_with_file_error():
             raise FileNotFoundError("檔案未找到")
         
-        with patch('error_handler.error_logger') as mock_logger:
-            result = safe_execute(function_with_file_error, default_return=None)
-            self.assertIsNone(result)
-            mock_logger.error.assert_called_once()
+        mock_logger = MagicMock()
+        result = safe_execute(
+            function_with_file_error, 
+            logger=mock_logger,
+            default_return=None
+        )
+        self.assertIsNone(result)
+        mock_logger.error.assert_called_once()
     
     def test_safe_execute_permission_error(self):
         """測試處理 PermissionError"""
         def function_with_permission_error():
             raise PermissionError("權限不足")
         
-        with patch('error_handler.error_logger') as mock_logger:
-            result = safe_execute(function_with_permission_error, default_return=False)
-            self.assertFalse(result)
-            mock_logger.error.assert_called_once()
-    
-    def test_safe_execute_memory_error(self):
-        """測試處理 MemoryError"""
-        def function_with_memory_error():
-            raise MemoryError("記憶體不足")
-        
-        with patch('error_handler.error_logger') as mock_logger:
-            result = safe_execute(function_with_memory_error, default_return=[])
-            self.assertEqual(result, [])
-            mock_logger.error.assert_called_once()
-    
-    def test_safe_execute_import_error(self):
-        """測試處理 ImportError"""
-        def function_with_import_error():
-            raise ImportError("模組導入錯誤")
-        
-        with patch('error_handler.error_logger') as mock_logger:
-            result = safe_execute(function_with_import_error, default_return={})
-            self.assertEqual(result, {})
-            mock_logger.error.assert_called_once()
-    
-    def test_safe_execute_generic_exception(self):
-        """測試處理一般異常"""
-        def function_with_generic_error():
-            raise ValueError("一般錯誤")
-        
-        with patch('error_handler.error_logger') as mock_logger:
-            result = safe_execute(function_with_generic_error, default_return="error")
-            self.assertEqual(result, "error")
-            mock_logger.error.assert_called_once()
-    
-    def test_safe_execute_custom_logger(self):
-        """測試使用自定義 logger"""
         mock_logger = MagicMock()
-        
-        def function_with_error():
-            raise ValueError("測試錯誤")
-        
         result = safe_execute(
-            function_with_error, 
-            logger=mock_logger, 
-            default_return="custom"
+            function_with_permission_error, 
+            logger=mock_logger,
+            default_return=False
         )
-        self.assertEqual(result, "custom")
+        self.assertFalse(result)
         mock_logger.error.assert_called_once()
     
-    def test_safe_execute_with_error_prefix(self):
-        """測試錯誤訊息前綴"""
+    def test_safe_execute_custom_error_prefix(self):
+        """測試自定義錯誤訊息前綴"""
         def function_with_error():
             raise ValueError("測試錯誤")
         
-        with patch('error_handler.error_logger') as mock_logger:
-            safe_execute(
+        mock_logger = MagicMock()
+        safe_execute(
+            function_with_error,
+            logger=mock_logger,
+            error_msg_prefix="模組A處理時",
+            default_return=None
+        )
+        
+        # 檢查日誌訊息是否包含前綴
+        call_args = mock_logger.error.call_args[0][0]
+        self.assertIn("模組A處理時", call_args)
+    
+    def test_safe_execute_without_logger(self):
+        """測試沒有 logger 的情況"""
+        def function_with_error():
+            raise ValueError("測試錯誤")
+        
+        # 應該返回預設值而不拋出異常
+        with patch('builtins.print') as mock_print:
+            result = safe_execute(
                 function_with_error,
-                error_msg_prefix="模組A處理時",
-                default_return=None
+                default_return="fallback"
             )
+            self.assertEqual(result, "fallback")
+            mock_print.assert_called()
+    
+    def test_safe_execute_waifuc_base_error(self):
+        """測試處理 WaifucBaseError"""
+        def function_with_waifuc_error():
+            raise WaifucBaseError("測試錯誤", {"test": "context"})
+        
+        mock_logger = MagicMock()
+        result = safe_execute(
+            function_with_waifuc_error, 
+            logger=mock_logger,
+            default_return="error_handled"
+        )
+        self.assertEqual(result, "error_handled")
+        mock_logger.error.assert_called_once()
+
+
+class TestHandleException(unittest.TestCase):
+    """測試異常處理函數"""
+    
+    def test_handle_exception_with_logger(self):
+        """測試有 logger 的異常處理"""
+        mock_logger = MagicMock()
+        
+        try:
+            raise ValueError("測試異常")
+        except Exception:
+            import sys
+            exc_info = sys.exc_info()
+            handle_exception(
+                exc_info[0], exc_info[1], exc_info[2], 
+                mock_logger, "TestContext"
+            )
+        
+        mock_logger.error.assert_called_once()
+        call_args = mock_logger.error.call_args[0][0]
+        self.assertIn("TestContext", call_args)
+        self.assertIn("ValueError", call_args)
+        self.assertIn("測試異常", call_args)
+    
+    def test_handle_exception_without_logger(self):
+        """測試沒有 logger 的異常處理"""
+        try:
+            raise ValueError("測試異常")
+        except Exception:
+            import sys
+            exc_info = sys.exc_info()
             
-            # 檢查日誌訊息是否包含前綴
-            call_args = mock_logger.error.call_args[0][0]
-            self.assertIn("模組A處理時", call_args)
-
-
-class TestValidateDirectory(unittest.TestCase):
-    """測試目錄驗證函數"""
-    
-    def setUp(self):
-        """設定測試環境"""
-        self.test_dir = setup_test_environment()
-        self.test_paths = create_test_directory_structure(self.test_dir)
-    
-    def tearDown(self):
-        """清理測試環境"""
-        teardown_test_environment()
-    
-    def test_validate_existing_directory(self):
-        """測試驗證存在的目錄"""
-        # 這個函數在 error_handler.py 中可能不存在，所以先跳過
-        pass
-    
-    def test_validate_nonexistent_directory(self):
-        """測試驗證不存在的目錄"""
-        # 這個函數在 error_handler.py 中可能不存在，所以先跳過
-        pass
-
-
-class TestGetUserFriendlyErrorMessage(unittest.TestCase):
-    """測試用戶友好錯誤訊息函數"""
-    
-    def test_directory_error_message(self):
-        """測試目錄錯誤訊息"""
-        # 這個函數在 error_handler.py 中可能不存在，所以先跳過
-        pass
+            with patch('builtins.print') as mock_print:
+                with patch('traceback.print_exception') as mock_traceback:
+                    handle_exception(
+                        exc_info[0], exc_info[1], exc_info[2], 
+                        None, "TestContext"
+                    )
+                    
+                    mock_print.assert_called_once()
+                    mock_traceback.assert_called_once()
+                    
+                    print_call = mock_print.call_args[0][0]
+                    self.assertIn("TestContext", print_call)
+                    self.assertIn("CRITICAL ERROR", print_call)
 
 
 if __name__ == '__main__':

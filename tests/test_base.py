@@ -70,6 +70,59 @@ def create_test_image(path: str, size: Optional[tuple] = None, mode: Optional[st
     img.save(path)
 
 
+class MockLogger:
+    """一個簡單的 Mock Logger，用於測試日誌記錄呼叫。"""
+    def __init__(self):
+        self.messages = {
+            "debug": [],
+            "info": [],
+            "warning": [],
+            "error": [],
+            "critical": [],
+            "exception": [] # For logger.exception()
+        }
+        # Create mock methods for each level
+        self.debug = MagicMock(side_effect=lambda msg, *args, **kwargs: self._log("debug", msg, *args, **kwargs))
+        self.info = MagicMock(side_effect=lambda msg, *args, **kwargs: self._log("info", msg, *args, **kwargs))
+        self.warning = MagicMock(side_effect=lambda msg, *args, **kwargs: self._log("warning", msg, *args, **kwargs))
+        self.error = MagicMock(side_effect=lambda msg, *args, **kwargs: self._log("error", msg, *args, **kwargs))
+        self.critical = MagicMock(side_effect=lambda msg, *args, **kwargs: self._log("critical", msg, *args, **kwargs))
+        # logger.exception is often called with an exception object or exc_info=True
+        self.exception = MagicMock(side_effect=lambda msg, *args, **kwargs: self._log("exception", msg, *args, **kwargs))
+
+    def _log(self, level: str, msg: str, *args, **kwargs):
+        if args:
+            formatted_msg = msg % args
+        else:
+            formatted_msg = msg
+        self.messages[level].append(formatted_msg)
+        # If exc_info=True is passed to error or exception, it might be useful to store that too
+        if kwargs.get('exc_info'):
+            # In a real scenario, you might store the exception info
+            pass
+
+    def get_messages(self, level: str) -> List[str]:
+        return self.messages.get(level, [])
+
+    def reset(self):
+        for level_messages in self.messages.values():
+            level_messages.clear()
+        self.debug.reset_mock()
+        self.info.reset_mock()
+        self.warning.reset_mock()
+        self.error.reset_mock()
+        self.critical.reset_mock()
+        self.exception.reset_mock()
+
+    def assert_called_with_message_containing(self, level: str, substring: str):
+        found = any(substring in msg for msg in self.get_messages(level))
+        assert found, f"No '{level}' log message found containing: '{substring}'. Logs: {self.get_messages(level)}"
+
+    def assert_not_called_with_message_containing(self, level: str, substring: str):
+        found = any(substring in msg for msg in self.get_messages(level))
+        assert not found, f"A '{level}' log message was found containing: '{substring}'. Logs: {self.get_messages(level)}"
+
+
 def create_corrupted_image(path: str):
     """
     創建損壞的測試圖片檔案
