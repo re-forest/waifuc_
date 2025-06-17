@@ -1,5 +1,6 @@
 import os
 import onnxruntime
+from pathlib import Path
 from dotenv import load_dotenv
 from imgutils.tagging import get_wd14_tags, tags_to_text
 from concurrent.futures import ThreadPoolExecutor
@@ -49,9 +50,18 @@ def process_image(image_path):
         parts.append(feature_tags)
         text_output = ",".join(parts)
             
-        # 檢查 text_output 若有 "1girl," 則移至字串開頭
-        if "1girl," in text_output:
-            text_output = "1girl," + text_output.replace("1girl,", "")
+        # 檢查 text_output 若有 "1girl,"或 "1boy,"則移至字串開頭
+        tags_list = [tag.strip() for tag in text_output.split(",") if tag.strip()]
+        priority_tags = ["1girl", "1boy"]
+        
+        # 找到第一個優先標籤並移至開頭
+        for priority_tag in priority_tags:
+            if priority_tag in tags_list:
+                tags_list.remove(priority_tag)
+                tags_list.insert(0, priority_tag)
+                break
+                
+        text_output = ",".join(tags_list)
         
         # 儲存標籤到對應的 .txt 檔案
         txt_filename = os.path.splitext(image_path)[0] + ".txt"
@@ -111,20 +121,24 @@ def tag_image(image_path):
         
     return len(image_list)
         
-if __name__ == "__main__":
-    # 載入環境變數
+if __name__ == "__main__":    # 載入環境變數
     load_dotenv()
     
     # 顯示 onnxruntime 版本
     print(f"使用 onnxruntime 版本: {onnxruntime.__version__}")
     
-    # 從環境變數中讀取輸出目錄
-    directory = os.getenv("output_directory")
-    if not directory or not os.path.isdir(directory):
+    # 從環境變數中讀取輸出目錄並轉為 Path 物件
+    directory_str = os.getenv("output_directory")
+    if not directory_str:
+        print("錯誤: 未設定 output_directory 環境變數")
+        exit(1)
+        
+    directory = Path(directory_str)
+    if not directory.exists() or not directory.is_dir():
         print(f"錯誤: 目錄 '{directory}' 不存在或不是有效目錄")
         exit(1)
         
     # 開始標記圖片
-    processed_count = tag_image(directory)
+    processed_count = tag_image(str(directory))
     print(f"標記完成，共處理 {processed_count} 張圖片")
 
