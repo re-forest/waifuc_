@@ -82,14 +82,19 @@ def save_processed_image(pil_image, original_filename_or_base, output_dir, logge
         new_suffix (str, optional): 加到原始檔名（去除副檔名後）之後的新後綴。
 
     Returns:
-        str | None: 儲存後的檔案路徑，或在失敗時返回 None。
-    """
+        str | None: 儲存後的檔案路徑，或在失敗時返回 None。    """
     os.makedirs(output_dir, exist_ok=True)
-    # TODO: 實現詳細邏輯，包括檔名生成
+    
     try:
         base, ext = os.path.splitext(original_filename_or_base)
         if not ext: # 如果原始輸入沒有副檔名 (例如只是一個 base name)
             ext = ".png" # 預設為 .png
+        
+        # 檢查並修正不支持的檔案擴展名
+        supported_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif', '.webp'}
+        if ext.lower() not in supported_extensions:
+            logger.warning(f"[FileUtils] Unsupported file extension '{ext}', using .png instead")
+            ext = ".png"
         
         # 移除路徑部分，只取檔名
         base = os.path.basename(base)
@@ -237,3 +242,152 @@ def is_path_safe_for_gradio(path, allowed_paths=None):
         if abs_path.startswith(allowed):
             return True
     return False
+
+def scan_directory_for_images(directory_path, recursive=True, supported_extensions=None):
+    """
+    掃描目錄中的所有圖片文件，支援遞歸掃描子目錄。
+    
+    Args:
+        directory_path (str): 要掃描的目錄路徑
+        recursive (bool): 是否遞歸掃描子目錄
+        supported_extensions (list): 支援的圖片副檔名列表
+        
+    Returns:
+        list: 找到的圖片文件路徑列表
+    """
+    if supported_extensions is None:
+        supported_extensions = ['.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.webp']
+    
+    image_files = []
+    
+    if not os.path.isdir(directory_path):
+        return image_files
+    
+    try:
+        if recursive:
+            # 遞歸掃描所有子目錄
+            for root, dirs, files in os.walk(directory_path):
+                for file in files:
+                    if any(file.lower().endswith(ext) for ext in supported_extensions):
+                        image_files.append(os.path.join(root, file))
+        else:
+            # 只掃描當前目錄
+            for file in os.listdir(directory_path):
+                file_path = os.path.join(directory_path, file)
+                if os.path.isfile(file_path) and any(file.lower().endswith(ext) for ext in supported_extensions):
+                    image_files.append(file_path)
+                    
+        # 按文件名排序以確保處理順序一致
+        image_files.sort()
+        
+    except Exception as e:
+        print(f"Error scanning directory {directory_path}: {e}")
+        
+    return image_files
+
+def create_output_structure(input_path, output_base_dir, preserve_structure=True):
+    """
+    基於輸入路徑創建輸出目錄結構。
+    
+    Args:
+        input_path (str): 輸入文件路徑
+        output_base_dir (str): 輸出基礎目錄
+        preserve_structure (bool): 是否保持原有目錄結構
+        
+    Returns:
+        str: 輸出文件應該保存的目錄路徑
+    """
+    if not preserve_structure:
+        # 所有文件都輸出到基礎目錄
+        return output_base_dir
+    
+    # 保持目錄結構
+    input_dir = os.path.dirname(input_path)
+    relative_dir = os.path.relpath(input_dir, start=os.path.dirname(input_path))
+    
+    if relative_dir == '.':
+        return output_base_dir
+    else:
+        output_dir = os.path.join(output_base_dir, relative_dir)
+        os.makedirs(output_dir, exist_ok=True)
+        return output_dir
+
+def get_relative_output_path(input_file_path, input_base_dir, output_base_dir):
+    """
+    根據輸入文件路徑和基礎目錄，計算相對應的輸出路徑。
+    保持原有的目錄結構。
+    
+    Args:
+        input_file_path (str): 輸入文件的完整路徑
+        input_base_dir (str): 輸入文件的基礎目錄
+        output_base_dir (str): 輸出文件的基礎目錄
+        
+    Returns:
+        str: 輸出文件應該保存的目錄路徑
+    """
+    # 計算相對於輸入基礎目錄的相對路徑
+    try:
+        relative_path = os.path.relpath(os.path.dirname(input_file_path), input_base_dir)
+        
+        if relative_path == '.':
+            # 文件就在基礎目錄中
+            output_dir = output_base_dir
+        else:
+            # 文件在子目錄中，保持相同的子目錄結構
+            output_dir = os.path.join(output_base_dir, relative_path)
+            
+        os.makedirs(output_dir, exist_ok=True)
+        return output_dir
+        
+    except Exception as e:
+        print(f"Error calculating output path for {input_file_path}: {e}")
+        return output_base_dir
+
+def safe_move_file(source_path, target_path, logger, overwrite=True):
+    """
+    安全地移動檔案，處理目標檔案已存在的情況。
+    
+    Args:
+        source_path (str): 來源檔案路徑
+        target_path (str): 目標檔案路徑
+        logger: 日誌記錄器
+        overwrite (bool): 是否覆蓋已存在的檔案
+        
+    Returns:
+        str: 最終的檔案路徑，如果失敗則返回 None
+    """
+    try:
+        # 確保目標目錄存在
+        target_dir = os.path.dirname(target_path)
+        os.makedirs(target_dir, exist_ok=True)
+        
+        # 如果目標檔案已存在
+        if os.path.exists(target_path):
+            if overwrite:
+                # 覆蓋模式：先刪除目標檔案
+                try:
+                    os.remove(target_path)
+                    logger.info(f"[FileUtils] Removed existing file: {target_path}")
+                except Exception as e:
+                    logger.warning(f"[FileUtils] Failed to remove existing file {target_path}: {e}")
+            else:
+                # 不覆蓋模式：生成新的檔名
+                base, ext = os.path.splitext(target_path)
+                counter = 1
+                while os.path.exists(target_path):
+                    target_path = f"{base}_{counter}{ext}"
+                    counter += 1
+                logger.info(f"[FileUtils] Target file exists, using new name: {target_path}")
+        
+        # 執行移動操作
+        if os.path.exists(source_path):
+            os.rename(source_path, target_path)
+            logger.info(f"[FileUtils] Successfully moved file: {source_path} -> {target_path}")
+            return target_path
+        else:
+            logger.error(f"[FileUtils] Source file not found: {source_path}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"[FileUtils] Error moving file from {source_path} to {target_path}: {e}", exc_info=True)
+        return None

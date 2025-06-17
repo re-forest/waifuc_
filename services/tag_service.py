@@ -185,23 +185,147 @@ def tag_image_service(image_pil: Image.Image, logger, config=None):
     if config is None:
         config = default_settings # Fallback to default settings if no specific config is passed
         logger.info("[TagService] No specific config provided, using default settings.")
-
+    
     # Use safe_execute to wrap the core logic
-    success, result_or_error = safe_execute(
+    result_or_error = safe_execute(
         _tag_image_core_logic,
         image_pil,
-        logger=logger,
-        config=config, # Pass config to the core logic
+        logger,
+        config,
+        default_return=(None, "Tag processing failed due to an internal error."),
         error_msg_prefix="[TagService] Error during image tagging"
     )
 
-    if success:
-        tags, msg = result_or_error
-        return tags, msg
+    if result_or_error and result_or_error != (None, "Tag processing failed due to an internal error."):
+        return result_or_error
     else:
         # error_msg_prefix is already included by safe_execute in result_or_error
         logger.error(f"[TagService] Tagging failed: {result_or_error}")
         return "", f"Tagging failed: {result_or_error}"
+
+def save_tags_to_file(image_path, tags_string, logger, config=None):
+    """
+    將標籤保存到文本文件
+    """
+    try:
+        # 確定標籤文件的路徑
+        base_path = os.path.splitext(image_path)[0]
+        tags_file_path = f"{base_path}.txt"
+        
+        # 如果配置指定了標籤目錄
+        if config and hasattr(config, 'TAG_OUTPUT_DIR'):
+            tags_dir = config.TAG_OUTPUT_DIR
+            os.makedirs(tags_dir, exist_ok=True)
+            filename = os.path.basename(base_path)
+            tags_file_path = os.path.join(tags_dir, f"{filename}.txt")
+        
+        # 寫入標籤文件
+        with open(tags_file_path, 'w', encoding='utf-8') as f:
+            f.write(tags_string)
+        
+        logger.info(f"[TagService] Saved tags to: {tags_file_path}")
+        return tags_file_path
+        
+    except Exception as e:
+        logger.error(f"[TagService] Failed to save tags to file: {e}")
+        return None
+
+def tag_batch_images(input_directory, logger, config=None):
+    """
+    批量標記圖片
+    """
+    logger.info(f"[TagService] Starting batch tagging for: {input_directory}")
+    
+    if not os.path.isdir(input_directory):
+        return False, "Input directory not found", {}
+    
+    # 掃描所有圖片文件
+    image_files = []
+    for root, dirs, files in os.walk(input_directory):
+        for filename in files:
+            if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp')):
+                image_files.append(os.path.join(root, filename))
+    
+    if not image_files:
+        return False, "No image files found", {}
+    
+    results = {
+        "processed_files": 0,
+        "successful_tags": 0,
+        "failed_tags": 0,
+        "total_tags_generated": 0,
+        "tag_files_saved": []
+    }
+    
+    for image_path in image_files:
+        try:
+            logger.info(f"[TagService] Processing: {os.path.basename(image_path)}")
+            
+            # 載入圖片
+            image_pil = Image.open(image_path)
+            
+            # 生成標籤
+            tags, message = tag_image_service(image_pil, logger, config)
+            
+            if tags and isinstance(tags, str):
+                # 保存標籤到文件
+                if getattr(config, 'TAG_AUTO_SAVE_TO_FILE', True):
+                    tags_file_path = save_tags_to_file(image_path, tags, logger, config)
+                    if tags_file_path:
+                        results["tag_files_saved"].append(tags_file_path)
+                
+                # 統計標籤數量
+                tag_count = len([t.strip() for t in tags.split(',') if t.strip()])
+                results["total_tags_generated"] += tag_count
+                results["successful_tags"] += 1
+                
+                logger.info(f"[TagService] Generated {tag_count} tags for {os.path.basename(image_path)}")
+            else:
+                results["failed_tags"] += 1
+                logger.warning(f"[TagService] Failed to generate tags for {os.path.basename(image_path)}")
+            
+            results["processed_files"] += 1
+            image_pil.close()
+            
+        except Exception as e:
+            results["failed_tags"] += 1
+            logger.error(f"[TagService] Error processing {image_path}: {e}")
+    
+    # 生成摘要
+    avg_tags = results["total_tags_generated"] / max(results["successful_tags"], 1)
+    summary = f"Batch tagging completed. Processed: {results['processed_files']}, Success: {results['successful_tags']}, Failed: {results['failed_tags']}, Avg tags: {avg_tags:.1f}"
+    logger.info(f"[TagService] {summary}")
+    
+    return True, summary, results
+
+def tag_image_service_entry(image_pil: Image.Image, logger, config=None):
+    """
+    Entry point for orchestrator - tags image using WD14.
+    Returns: (tags_dict, message)
+    """
+    try:
+        tags, message = tag_image_service(image_pil, logger, config)
+        # Convert tags string to dict format expected by orchestrator
+        if isinstance(tags, str) and tags:
+            # Enhanced conversion with tag count and categories
+            tag_list = [t.strip() for t in tags.split(',') if t.strip()]
+            tag_dict = {
+                "tags": tags, 
+                "raw_tags": tags,
+                "tag_count": len(tag_list),
+                "tag_list": tag_list
+            }
+        else:
+            tag_dict = {
+                "tags": "", 
+                "raw_tags": "",
+                "tag_count": 0,
+                "tag_list": []
+            }
+        return tag_dict, message
+    except Exception as e:
+        logger.error(f"[TagService] Error in tag_image_service_entry: {e}")
+        return {"tags": "", "raw_tags": "", "tag_count": 0, "tag_list": []}, f"Tagging error: {str(e)}"
 
 # Example usage (for testing this module directly)
 if __name__ == '__main__':

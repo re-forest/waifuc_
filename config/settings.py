@@ -28,7 +28,7 @@ DEFAULT_CONFIDENCE_THRESHOLD = 0.5
 
 # Gradio 應用設定
 GRADIO_SERVER_NAME = "0.0.0.0"
-GRADIO_SERVER_PORT = 7860
+GRADIO_SERVER_PORT = 7888
 GRADIO_SHARE = False # 開發時建議 False，部署時可考慮 True
 GRADIO_TITLE = "圖像處理工具 WaifuC"
 GRADIO_THEME = "soft" # 例如： 'default', 'huggingface', 'soft', 'glass', 'mono'
@@ -87,7 +87,7 @@ URL_DOWNLOAD_TIMEOUT = 30 # URL 下載超時時間 (秒)
 # 啟用/停用各處理步驟的開關
 ENABLE_VALIDATION = True
 ENABLE_FACE_DETECTION = True
-ENABLE_LPIPS_CLUSTERING = False # 預設關閉，因為可能較耗時或不常用
+ENABLE_LPIPS_CLUSTERING = True # 啟用以測試改進後的聚類效果
 ENABLE_CROP = True
 ENABLE_TAGGING = True
 ENABLE_UPSCALE = True
@@ -95,3 +95,37 @@ ENABLE_UPSCALE = True
 # 確保這些目錄也存在
 os.makedirs(GRADIO_TEMP_DIR, exist_ok=True)
 os.makedirs(TEMP_PROCESSING_DIR, exist_ok=True)
+
+# Face detection settings
+FACE_DETECTION_CONFIDENCE_THRESHOLD = 0.3  # 降低閾值以偵測更多臉部
+FACE_DETECTION_MODEL = "default"  # 可能需要嘗試不同模型
+
+# LPIPS clustering settings
+LPIPS_CLUSTERING_THRESHOLD = 0.3  # 進一步降低閾值以獲得更細緻的聚類
+LPIPS_MIN_SAMPLES = 2  # 最小樣本數
+LPIPS_BATCH_SIZE = 100  # 批次大小
+
+# Crop settings
+CROP_ENABLE_HEAD = True
+CROP_ENABLE_HALFBODY = True  
+CROP_ENABLE_PERSON = True
+CROP_MIN_SIZE = 64  # 最小裁切尺寸
+
+# Validation settings
+VALIDATION_QUARANTINE_INVALID = True  # 是否隔離無效圖片
+VALIDATION_QUARANTINE_DIR = None  # 隔離目錄，None則自動創建
+
+# Face detection settings for training
+FACE_DETECTION_AUTO_CLASSIFY = True  # 是否自動按人臉數量分類
+FACE_DETECTION_TARGET_FACE_COUNT = 1  # 訓練需要的人臉數量 (0=無人臉, 1=單人, 2=雙人, -1=不限制)
+FACE_DETECTION_FILTER_MODE = "keep_target"  # 過濾模式: "keep_target"(保留目標), "exclude_target"(排除目標), "classify_all"(只分類不過濾)
+FACE_DETECTION_EXCLUDED_DIR = "excluded_faces"  # 不符合要求的圖片存放目錄
+FACE_DETECTION_TRAINING_DIR = "training_faces"  # 符合訓練要求的圖片存放目錄
+
+# LPIPS clustering settings
+LPIPS_AUTO_ELIMINATE_DUPLICATES = True  # 是否自動淘汰重複圖片
+LPIPS_ELIMINATED_DIR = None  # 淘汰圖片存放目錄，None則自動創建
+
+# Tag service settings
+TAG_AUTO_SAVE_TO_FILE = True  # 是否自動保存標籤到文件
+TAG_OUTPUT_DIR = None  # 標籤文件輸出目錄，None則與圖片同目錄

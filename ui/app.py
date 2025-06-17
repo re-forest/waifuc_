@@ -15,18 +15,8 @@ if __name__ == '__main__':
         sys.path.insert(0, project_root)
 # --- End sys.path modification ---
 
-try:
-    from config import settings
-    from core.orchestrator import Orchestrator
-    from services import validator_service, upscale_service, crop_service, face_detection_service, tag_service, lpips_clustering_service
-    from utils.logger_config import setup_logging as project_setup_logging_actual
-    from utils.file_utils import prepare_preview_image # Actual import
-except ImportError as e:
-    print(f"Error importing project modules in ui/app.py: {e}")
-    print("Ensure you are running from the project root or have the correct PYTHONPATH.")
-    
-    # Fallback for settings if import fails
-    class FallbackSettings:
+# Fallback settings class - define globally
+class FallbackSettings:
         GRADIO_TITLE = "Fallback WaifuC - Error Mode"
         CUSTOM_CSS = None
         LOG_DIR = os.path.join(os.getcwd(), "logs_fallback")
@@ -58,10 +48,21 @@ except ImportError as e:
         ENABLE_UPSCALE = False
         
         # Add any other critical settings Orchestrator might access via getattr(self.config, ...)
-        # For example, if file_utils used by orchestrator needs specific keys from config.
-        # These are examples, ensure they match what file_utils or other parts might need.
         OUTPUT_DIR = os.path.join(os.getcwd(), "output_fallback")
-    settings = FallbackSettings() # settings is now an instance of FallbackSettings
+
+try:
+    from config import settings
+    from core.orchestrator import Orchestrator
+    from core.ui_adapter import UIAdapter, LegacyOrchestrator  # 新增檔案導向架構
+    from services import validator_service, upscale_service, crop_service, face_detection_service, tag_service, lpips_clustering_service
+    from utils.logger_config import setup_logging as project_setup_logging_actual
+    from utils.file_utils import prepare_preview_image
+except ImportError as e:
+    print(f"Error importing project modules in ui/app.py: {e}")
+    print("Ensure you are running from the project root or have the correct PYTHONPATH.")
+    
+    # Use fallback settings
+    settings = FallbackSettings()
 
     # Ensure fallback directories exist
     os.makedirs(settings.LOG_DIR, exist_ok=True)
@@ -70,7 +71,7 @@ except ImportError as e:
     if hasattr(settings, 'OUTPUT_DIR'):
          os.makedirs(settings.OUTPUT_DIR, exist_ok=True)
 
-    _prepare_preview_image_fallback = None # To store prepare_preview_image if it was imported    # Check if prepare_preview_image was successfully imported before the except block
+    _prepare_preview_image_fallback = None # To store prepare_preview_image if it was imported
     # If we are in this except block, the initial `from utils.file_utils import prepare_preview_image` might have failed.
     # However, the `globals()` check inside MockOrchestrator is more direct for its own scope.
     # For clarity, let's try to capture it if it was part of a partial success before the final ImportError.
@@ -167,6 +168,22 @@ except ImportError as e:
             self.logger.info(f"MockOrchestrator.process_directory called with {input_dir_path}")
             return [{"success": True, "message": "Mock directory processing complete."}]
 
+        def process_batch(self, input_directory, output_directory, recursive=True, preserve_structure=True, selected_steps=None):
+            self.logger.info(f"MockOrchestrator.process_batch called with {input_directory}")
+            self.logger.info(f"Output directory: {output_directory}, Recursive: {recursive}, Preserve structure: {preserve_structure}")
+            self.logger.info(f"Selected steps: {selected_steps}")
+            
+            # Mock batch processing result
+            return {
+                "success": True,
+                "message": "Mock batch processing complete.",
+                "total_files": 10,
+                "successful_files": 8,
+                "failed_files": 2,
+                "success_rate": 80.0,
+                "errors": ["Mock error 1", "Mock error 2"]
+            }
+
     Orchestrator = MockOrchestrator # Fallback Orchestrator
 
     # Mock service modules if Orchestrator fallback needs them for instantiation (it does)
@@ -219,117 +236,169 @@ def get_ui_app_logger():
             ui_app_logger = _logger # Assign the fallback logger
     return ui_app_logger
 
-def handle_submit_action(input_image_path, selected_step_keys, progress=gr.Progress(track_tqdm=True)):
-    logger_to_use = get_ui_app_logger() # Ensures logger is initialized
+def handle_submit_action(processing_mode, input_image_path, selected_step_keys, 
+                         input_directory, output_directory, recursive_checkbox, preserve_structure_checkbox,
+                         progress=gr.Progress(track_tqdm=True)):
+    logger_to_use = get_ui_app_logger()
 
-    logger_to_use.info(f"UI: Submit button clicked. Image path: {input_image_path}")
-    logger_to_use.info(f"UI: Selected step keys (from UI): {selected_step_keys}")
-
-    if not input_image_path:
-        logger_to_use.warning("UI: No image uploaded.")
-        return None, "錯誤：請先上傳圖片。", "請上傳圖片。", ""
+    logger_to_use.info(f"UI: Submit button clicked. Mode: {processing_mode}")
+    logger_to_use.info(f"UI: Selected step keys: {selected_step_keys}")
 
     app_config = settings
-    preview_image_path_for_gradio = None # Initialize
+    preview_image_path_for_gradio = None
+    batch_progress_text = ""
     tags_string = ""
-    detailed_log_messages = [] # For accumulating log messages for the UI
+    detailed_log_messages = []
 
     try:
-        # Instantiate the Orchestrator
-        orchestrator_instance = Orchestrator(
-            config=app_config,
-            validator_service=validator_service,
-            upscale_service=upscale_service,
-            crop_service=crop_service,
-            face_detection_service=face_detection_service,
-            tag_service=tag_service,
-            lpips_clustering_service=lpips_clustering_service,
-            logger=logger_to_use
-        )
-
-        # Configure which steps are enabled based on UI selection
-        # The Orchestrator's _execute_step already checks config flags like ENABLE_VALIDATION
-        # Here, we ensure those flags in the passed `app_config` reflect the UI choices.
-        # This requires `app_config` to be mutable or a copy if we don't want to alter global settings.
-        # For simplicity, let's assume we can temporarily modify a copy or that settings are per-request if complex.
-        # A better approach for per-request step enabling would be to pass selected_step_keys to orchestrator methods.
-        # However, current Orchestrator relies on config flags. So, we update them here.        # Create a mutable copy of settings for this request if settings is a module
-        # This is a simplified approach. A more robust solution might involve a request-specific config object.
-        # Check if app_config is a FallbackSettings instance, if so, create a copy of it
-        if isinstance(app_config, FallbackSettings):
-            # Create a copy of FallbackSettings instance
-            current_request_config = FallbackSettings()
-            for k in dir(app_config):
-                if not k.startswith('__') and hasattr(app_config, k):
-                    setattr(current_request_config, k, getattr(app_config, k))
+        # 使用新的檔案導向架構
+        use_file_based_architecture = True  # 切換開關
+        
+        if use_file_based_architecture:
+            # 使用新的檔案導向UIAdapter
+            ui_adapter = UIAdapter(
+                config=app_config,
+                logger=logger_to_use
+            )
+            logger_to_use.info("UI: Using new file-based architecture")
         else:
-            # For module-based config, we'll modify attributes directly on the original
-            # since modules are mutable and this is simpler for type checking
-            current_request_config = app_config
+            # 使用舊的記憶體導向Orchestrator
+            orchestrator_instance = Orchestrator(
+                config=app_config,
+                logger=logger_to_use
+            )
+            logger_to_use.info("UI: Using legacy memory-based architecture")
 
-        all_step_definitions = orchestrator_instance.step_definitions
-        for step_key_internal, step_def in all_step_definitions.items():
-            enable_flag_name = step_def["flag"] # e.g., "ENABLE_VALIDATION"
-            # Check if the UI-provided key (e.g., "validate") is in selected_step_keys
-            if step_key_internal in selected_step_keys:
-                setattr(current_request_config, enable_flag_name, True)
-                logger_to_use.info(f"UI: Enabling step {step_key_internal} ({enable_flag_name}=True) for this request.")
-            else:
-                setattr(current_request_config, enable_flag_name, False)
-                logger_to_use.info(f"UI: Disabling step {step_key_internal} ({enable_flag_name}=False) for this request.")
+        # Configure enabled steps based on UI selection
+        current_request_config = app_config
         
-        # Update the orchestrator's config to this request-specific one
-        orchestrator_instance.config = current_request_config
-
-        # Determine output filename prefix (e.g., from uploaded filename)
-        output_filename_prefix = "processed_image"
-        if input_image_path and isinstance(input_image_path, str):
-            output_filename_prefix = os.path.splitext(os.path.basename(input_image_path))[0]
-
-        # Call the orchestrator's process_single_image method
-        # This method now returns a dictionary
-        processing_result = orchestrator_instance.process_single_image(
-            image_path_or_url=input_image_path,
-            output_filename_prefix=output_filename_prefix
-        )
-        
-        logger_to_use.info("UI: Orchestrator processing complete.")
-        detailed_log_messages.append(f"Orchestrator reported: {processing_result.get('message', 'No message.')}")
-
-        if processing_result["success"]:
-            preview_image_path_for_gradio = processing_result.get("preview_image_path")
-            if preview_image_path_for_gradio:
-                logger_to_use.info(f"UI: Gradio preview path from orchestrator: {preview_image_path_for_gradio}")
-            else:
-                logger_to_use.warning("UI: Orchestrator succeeded but no preview_image_path was returned.")
-                detailed_log_messages.append("Warning: Orchestrator succeeded but no preview image path was provided.")
-            
-            if processing_result.get("tags"):
-                tags_dict = processing_result["tags"]
-                # Format tags for display (example: join general tags)
-                if isinstance(tags_dict, dict) and "general" in tags_dict:
-                    tags_string = ", ".join(tags_dict["general"])
-                elif isinstance(tags_dict, str): # If already a string
-                    tags_string = tags_dict
+        if use_file_based_architecture:
+            # 新架構：直接使用選擇的步驟列表
+            # 不需要修改配置，直接傳遞給UIAdapter
+            logger_to_use.info(f"UI: Selected steps for file-based processing: {selected_step_keys}")
+        else:
+            # 舊架構：修改配置標誌
+            all_step_definitions = orchestrator_instance.step_definitions
+            for step_key_internal, step_def in all_step_definitions.items():
+                enable_flag_name = step_def["flag"]
+                if step_key_internal in selected_step_keys:
+                    setattr(current_request_config, enable_flag_name, True)
+                    logger_to_use.info(f"UI: Enabling step {step_key_internal} ({enable_flag_name}=True)")
                 else:
-                    tags_string = str(tags_dict) # Fallback to string representation
-                logger_to_use.info(f"UI: Tags received: {tags_string}")
-        else:
-            logger_to_use.error(f"UI: Orchestrator processing failed. Message: {processing_result.get('message')}")
-            detailed_log_messages.append(f"Error: Orchestrator processing failed. {processing_result.get('message')}")
-
-        # Construct summary message for UI
-        final_summary_message = processing_result.get("message", "Processing finished.")
-        if tags_string:
-            final_summary_message += f"\\n\\n偵測到的標籤：\\n{tags_string}"
-        
-        # Join all detailed log messages for the UI log box
-        detailed_log_output = "\\n".join(detailed_log_messages)
+                    setattr(current_request_config, enable_flag_name, False)
+                    logger_to_use.info(f"UI: Disabling step {step_key_internal} ({enable_flag_name}=False)")
             
-        return preview_image_path_for_gradio, final_summary_message, detailed_log_output
+            orchestrator_instance.config = current_request_config
+
+        # 根據處理模式執行不同的邏輯
+        if processing_mode == "single":
+            # 單張圖片處理模式
+            if not input_image_path:
+                logger_to_use.warning("UI: No image uploaded for single mode.")
+                return None, "", "錯誤：請先上傳圖片。", "請上傳圖片。"
+
+            logger_to_use.info(f"UI: Single image processing: {input_image_path}")
+            
+            if use_file_based_architecture:
+                # 使用新的檔案導向架構
+                processing_result = ui_adapter.process_uploaded_image(
+                    uploaded_file_path=input_image_path,
+                    selected_steps=selected_step_keys,
+                    preview_mode=True  # UI模式預設為預覽
+                )
+            else:
+                # 使用舊的記憶體導向架構
+                output_filename_prefix = "processed_image"
+                if input_image_path and isinstance(input_image_path, str):
+                    output_filename_prefix = os.path.splitext(os.path.basename(input_image_path))[0]
+
+                processing_result = orchestrator_instance.process_single_image(
+                    image_path_or_url=input_image_path,
+                    output_filename_prefix=output_filename_prefix
+                )
+            
+            logger_to_use.info("UI: Single image processing complete.")
+            detailed_log_messages.append(f"Processing result: {processing_result.get('message', 'No message.')}")
+
+            if processing_result["success"]:
+                preview_image_path_for_gradio = processing_result.get("preview_image_path")
+                if processing_result.get("tags"):
+                    tags_dict = processing_result["tags"]
+                    if isinstance(tags_dict, dict) and "tags" in tags_dict:
+                        tags_string = tags_dict["tags"]
+                    elif isinstance(tags_dict, str):
+                        tags_string = tags_dict
+                    else:
+                        tags_string = str(tags_dict)
+                    logger_to_use.info(f"UI: Tags received: {tags_string}")
+            else:
+                logger_to_use.error(f"UI: Single image processing failed: {processing_result.get('message')}")
+                detailed_log_messages.append(f"Error: {processing_result.get('message')}")
+
+            final_summary_message = processing_result.get("message", "Processing finished.")
+            if tags_string:
+                final_summary_message += f"\\n\\n偵測到的標籤：\\n{tags_string}"
+            
+            batch_progress_text = ""  # 單張模式不需要進度文字
+            
+        else:
+            # 批量處理模式
+            if not input_directory:
+                logger_to_use.warning("UI: No input directory specified for batch mode.")
+                return None, "錯誤：請指定輸入資料夾路徑。", "錯誤：請指定輸入資料夾路徑。", "請指定輸入資料夾路徑。"
+
+            logger_to_use.info(f"UI: Batch processing: {input_directory}")
+            
+            # 使用預設輸出目錄如果未指定
+            batch_output_dir = output_directory if output_directory else getattr(current_request_config, 'OUTPUT_DIR', 'output_images')
+            
+            if use_file_based_architecture:
+                # 使用新的檔案導向架構
+                batch_result = ui_adapter.process_batch_directory(
+                    input_directory=input_directory,
+                    output_directory=batch_output_dir,
+                    selected_steps=selected_step_keys,
+                    recursive=recursive_checkbox,
+                    preserve_structure=preserve_structure_checkbox
+                )
+            else:
+                # 使用舊的記憶體導向架構
+                batch_result = orchestrator_instance.process_batch(
+                    input_directory=input_directory,
+                    output_directory=batch_output_dir,
+                    recursive=recursive_checkbox,
+                    preserve_structure=preserve_structure_checkbox,
+                    selected_steps=selected_step_keys
+                )
+            
+            logger_to_use.info("UI: Batch processing complete.")
+            
+            # 格式化批量處理進度文字
+            if batch_result["success"]:
+                batch_progress_text = (
+                    f"批量處理完成\\n"
+                    f"總文件數: {batch_result['total_files']}\\n"
+                    f"成功處理: {batch_result['successful_files']}\\n"
+                    f"失敗數量: {batch_result['failed_files']}\\n"
+                    f"成功率: {batch_result.get('success_rate', 0):.1f}%"
+                )
+                if batch_result.get('errors'):
+                    batch_progress_text += f"\\n\\n錯誤摘要:\\n" + "\\n".join(batch_result['errors'][:5])
+                    if len(batch_result['errors']) > 5:
+                        batch_progress_text += f"\\n... 還有 {len(batch_result['errors']) - 5} 個錯誤"
+            else:
+                batch_progress_text = f"批量處理失敗: {batch_result.get('message', '未知錯誤')}"
+            
+            final_summary_message = batch_result.get("message", "Batch processing finished.")
+            detailed_log_messages.append(f"Batch result: {final_summary_message}")
+            
+            preview_image_path_for_gradio = None  # 批量模式不顯示預覽圖片
+
+        detailed_log_output = "\\n".join(detailed_log_messages)
+        return preview_image_path_for_gradio, batch_progress_text, final_summary_message, detailed_log_output
     except Exception as e:
         logger_to_use.error(f"UI: Error calling orchestrator or during processing: {e}", exc_info=True)
-        return None, f"處理過程中發生錯誤：{e}", f"詳細錯誤資訊請查看日誌。\\n{traceback.format_exc()}", ""
+        return None, f"處理過程中發生錯誤：{e}", f"處理過程中發生錯誤：{e}", f"詳細錯誤資訊請查看日誌。\\n{traceback.format_exc()}"
 
 def create_ui(app_logger_instance=None):
     global ui_app_logger # Still using global for module-wide access if needed elsewhere
@@ -359,10 +428,28 @@ def create_ui(app_logger_instance=None):
     with gr.Blocks(theme=gradio_theme, css=custom_css_path, title=gradio_title) as demo:
         gr.Markdown(f"<h1 style='text-align: center;'>{gradio_title}</h1>")
 
+        # 處理模式選擇
+        with gr.Row():
+            processing_mode = gr.Radio(
+                choices=[("單張圖片處理", "single"), ("批量處理資料夾", "batch")],
+                label="處理模式",
+                value="single"
+            )
+
         with gr.Row():
             with gr.Column(scale=1, min_width=400):
-                # Input image should provide a filepath for the orchestrator
-                input_image = gr.Image(type="filepath", label="上傳圖片", sources=["upload", "clipboard"])
+                # 單張圖片輸入
+                with gr.Group(visible=True) as single_input_group:
+                    input_image = gr.Image(type="filepath", label="上傳圖片", sources=["upload", "clipboard"])
+                
+                # 批量處理輸入
+                with gr.Group(visible=False) as batch_input_group:
+                    input_directory = gr.Textbox(label="輸入資料夾路徑", placeholder="/path/to/input/directory")
+                    output_directory = gr.Textbox(label="輸出資料夾路徑", placeholder="/path/to/output/directory (留空使用預設)")
+                    
+                    with gr.Row():
+                        recursive_checkbox = gr.Checkbox(label="遞歸處理子資料夾", value=True)
+                        preserve_structure_checkbox = gr.Checkbox(label="保持原有目錄結構", value=True)
                 
                 gr.Markdown("### 選擇處理步驟")
                 step_checkboxes = gr.CheckboxGroup(
@@ -374,17 +461,51 @@ def create_ui(app_logger_instance=None):
                 submit_button = gr.Button("開始處理", variant="primary", elem_id="submit_button_custom")
 
             with gr.Column(scale=1, min_width=400):
-                # Output image now expects a filepath, as prepared by prepare_preview_image
-                output_image = gr.Image(type="filepath", label="處理結果預覽", interactive=False)
+                # 單張圖片輸出
+                with gr.Group(visible=True) as single_output_group:
+                    output_image = gr.Image(type="filepath", label="處理結果預覽", interactive=False)
+                
+                # 批量處理輸出
+                with gr.Group(visible=False) as batch_output_group:
+                    batch_progress = gr.Textbox(label="批量處理進度", lines=3, interactive=False)
+                
+                # 共用輸出
                 status_message = gr.Textbox(label="處理摘要與標籤", lines=5, interactive=False, max_lines=15)
                 detailed_log = gr.Textbox(label="詳細日誌", lines=8, interactive=False, max_lines=20)
 
-        all_inputs = [input_image, step_checkboxes]
+        # 處理模式切換的可見性控制
+        def toggle_processing_mode(mode):
+            if mode == "single":
+                return (
+                    gr.update(visible=True),   # single_input_group
+                    gr.update(visible=False),  # batch_input_group
+                    gr.update(visible=True),   # single_output_group
+                    gr.update(visible=False)   # batch_output_group
+                )
+            else:  # batch
+                return (
+                    gr.update(visible=False),  # single_input_group
+                    gr.update(visible=True),   # batch_input_group
+                    gr.update(visible=False),  # single_output_group
+                    gr.update(visible=True)    # batch_output_group
+                )
+
+        processing_mode.change(
+            fn=toggle_processing_mode,
+            inputs=[processing_mode],
+            outputs=[single_input_group, batch_input_group, single_output_group, batch_output_group]
+        )
+
+        # 設定輸入參數
+        all_inputs = [
+            processing_mode, input_image, step_checkboxes,
+            input_directory, output_directory, recursive_checkbox, preserve_structure_checkbox
+        ]
 
         submit_button.click(
             fn=handle_submit_action,
             inputs=all_inputs,
-            outputs=[output_image, status_message, detailed_log]
+            outputs=[output_image, batch_progress, status_message, detailed_log]
         )
     ui_app_logger.info("UI: Gradio UI creation complete.")
     return demo

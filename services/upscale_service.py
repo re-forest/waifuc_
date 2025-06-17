@@ -320,6 +320,166 @@ def upscale_image_service_entry(image_path, logger, config=None, output_path=Non
         logger.info("[UpscaleService] Output path not provided. Returning processed PIL image.")
         return processed_image, None, message # Return PIL image, no path, and message
 
+def upscale_batch_images(input_directory, output_directory, logger, config=None):
+    """
+    批量放大圖片到指定尺寸
+    """
+    logger.info(f"[UpscaleService] Starting batch upscale")
+    logger.info(f"[UpscaleService] Input: {input_directory}, Output: {output_directory}")
+    
+    if not os.path.isdir(input_directory):
+        return False, "Input directory not found", {}
+    
+    os.makedirs(output_directory, exist_ok=True)
+    
+    # 掃描所有圖片文件
+    image_files = []
+    for root, dirs, files in os.walk(input_directory):
+        for filename in files:
+            if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp')):
+                image_files.append(os.path.join(root, filename))
+    
+    if not image_files:
+        return False, "No image files found", {}
+    
+    results = {
+        "processed_files": 0,
+        "successful_upscales": 0,
+        "failed_upscales": 0,
+        "skipped_files": 0,
+        "total_size_before": 0,
+        "total_size_after": 0,
+        "upscaled_files": []
+    }
+    
+    for image_path in image_files:
+        try:
+            logger.info(f"[UpscaleService] Processing: {os.path.basename(image_path)}")
+            
+            # 記錄原始文件大小
+            original_size = os.path.getsize(image_path)
+            results["total_size_before"] += original_size
+            
+            # 生成輸出路徑
+            filename = os.path.basename(image_path)
+            name, ext = os.path.splitext(filename)
+            output_filename = f"{name}_upscaled{ext}"
+            output_path = os.path.join(output_directory, output_filename)
+            
+            # 處理重名文件
+            if os.path.exists(output_path):
+                counter = 1
+                while os.path.exists(output_path):
+                    output_filename = f"{name}_upscaled_{counter}{ext}"
+                    output_path = os.path.join(output_directory, output_filename)
+                    counter += 1
+            
+            # 執行放大
+            result_image, final_output_path, message = upscale_image_service_entry(
+                image_path, logger, config, output_path
+            )
+            
+            if result_image and final_output_path and os.path.exists(final_output_path):
+                # 記錄處理後文件大小
+                upscaled_size = os.path.getsize(final_output_path)
+                results["total_size_after"] += upscaled_size
+                results["successful_upscales"] += 1
+                results["upscaled_files"].append(final_output_path)
+                
+                logger.info(f"[UpscaleService] Successfully upscaled {filename}: {original_size/1024:.1f}KB -> {upscaled_size/1024:.1f}KB")
+            elif "Skipped" in message:
+                results["skipped_files"] += 1
+                logger.info(f"[UpscaleService] Skipped {filename}: {message}")
+            else:
+                results["failed_upscales"] += 1
+                logger.warning(f"[UpscaleService] Failed to upscale {filename}: {message}")
+            
+            results["processed_files"] += 1
+            
+        except Exception as e:
+            results["failed_upscales"] += 1
+            logger.error(f"[UpscaleService] Error processing {image_path}: {e}")
+    
+    # 生成摘要
+    size_increase = ((results["total_size_after"] / max(results["total_size_before"], 1)) - 1) * 100
+    summary = f"Batch upscale completed. Processed: {results['processed_files']}, Success: {results['successful_upscales']}, Failed: {results['failed_upscales']}, Skipped: {results['skipped_files']}, Size increase: {size_increase:.1f}%"
+    logger.info(f"[UpscaleService] {summary}")
+    
+    return True, summary, results
+
+def upscale_to_training_size(image_pil, target_size, logger, config=None):
+    """
+    將圖片放大到適合訓練的尺寸
+    target_size: tuple (width, height) 或 int (正方形)
+    """
+    try:
+        if isinstance(target_size, int):
+            target_width = target_height = target_size
+        else:
+            target_width, target_height = target_size
+        
+        original_width, original_height = image_pil.size
+        logger.info(f"[UpscaleService] Upscaling for training: {original_width}x{original_height} -> {target_width}x{target_height}")
+        
+        # 創建臨時配置
+        class TrainingUpscaleConfig:
+            def __init__(self, base_config, target_w, target_h):
+                # 複製基礎配置
+                if base_config:
+                    for attr in dir(base_config):
+                        if not attr.startswith('_'):
+                            setattr(self, attr, getattr(base_config, attr))
+                
+                # 覆蓋訓練特定設置
+                self.UPSCALE_TARGET_WIDTH = target_w
+                self.UPSCALE_TARGET_HEIGHT = target_h
+                self.UPSCALE_PRESERVE_ASPECT_RATIO = False  # 精確尺寸
+                self.UPSCALE_CENTER_CROP_AFTER_UPSCALE = True  # 裁切到精確尺寸
+                self.UPSCALE_MIN_SIZE_THRESHOLD = None  # 總是執行
+        
+        training_config = TrainingUpscaleConfig(config, target_width, target_height)
+        
+        # 執行放大
+        result_image, message = upscale_image_service(image_pil, logger, training_config)
+        
+        if result_image:
+            final_width, final_height = result_image.size
+            logger.info(f"[UpscaleService] Training upscale completed: {final_width}x{final_height}")
+            
+            # 驗證尺寸是否符合要求
+            if final_width == target_width and final_height == target_height:
+                return result_image, f"Successfully upscaled to training size: {target_width}x{target_height}"
+            else:
+                logger.warning(f"[UpscaleService] Size mismatch. Expected: {target_width}x{target_height}, Got: {final_width}x{final_height}")
+                return result_image, f"Upscaled but size mismatch. Got: {final_width}x{final_height}"
+        else:
+            return image_pil, f"Training upscale failed: {message}"
+            
+    except Exception as e:
+        logger.error(f"[UpscaleService] Error in training upscale: {e}")
+        return image_pil, f"Training upscale error: {str(e)}"
+
+def upscale_image_service_entry_for_orchestrator(image_pil: Image.Image, logger, config=None):
+    """
+    Entry point for orchestrator - upscales PIL image.
+    Returns: (result_image, output_path, message) - standardized 3-value return
+    
+    This function bridges the gap between orchestrator's expectation and 
+    the existing upscale_image_service function.
+    """
+    try:
+        # Use the existing upscale_image_service which accepts PIL Image
+        result_image, message = upscale_image_service(image_pil, logger, config)
+        
+        # Return in the format orchestrator expects: (image, path, message)
+        # output_path is None since we're working with PIL images in memory
+        return result_image, None, message
+        
+    except Exception as e:
+        logger.error(f"[UpscaleService] Error in orchestrator entry point: {e}", exc_info=True)
+        # Return original image with error message in case of failure
+        return image_pil, None, f"Upscale failed: {str(e)}"
+
 # Example usage (for testing this module directly)
 if __name__ == '__main__':
     from utils.logger_config import setup_logging
