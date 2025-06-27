@@ -214,6 +214,162 @@ def upscale_images_in_directory(directory, target_width=1024, target_height=1024
     
     return len(image_files), upscaled_count
 
+def upscale_images_with_summary(directory, target_width=1024, target_height=1024, 
+                               model='HGSR-MHR-anime-aug_X4_320', recursive=True, min_size=0):
+    """
+    處理目錄中的圖像放大並返回詳細摘要
+    
+    Parameters:
+    - directory: 包含圖像的目錄路徑
+    - target_width: 目標寬度
+    - target_height: 目標高度
+    - model: 使用的CDC模型名稱
+    - recursive: 是否遞迴處理子目錄
+    - min_size: 最小寬度或高度閾值，小於此值的圖像才會被放大
+    
+    Returns:
+    - dict: 包含處理結果摘要的字典
+    """
+    logs = []
+    try:
+        # 驗證輸入目錄
+        if not directory or not os.path.isdir(directory):
+            return {
+                "success": False,
+                "error": f"目錄不存在或不是有效目錄: {directory}",
+                "logs": [f"目錄不存在或不是有效目錄: {directory}"],
+                "directory": directory,
+                "total_files": 0,
+                "upscaled_files": 0,
+                "skipped_files": 0,
+                "failed_files": 0,
+                "target_size": f"{target_width}x{target_height}",
+                "model": model,
+                "processing_time": 0
+            }
+        
+        logs.append(f"開始處理目錄: {directory}")
+        logs.append(f"目標尺寸: {target_width}x{target_height}")
+        logs.append(f"使用模型: {model}")
+        logs.append(f"遞迴處理: {recursive}")
+        logs.append(f"最小尺寸閾值: {min_size}")
+        
+        # 記錄開始時間
+        import time
+        start_time = time.time()
+        
+        # 支援的圖像格式
+        supported_formats = ['.jpg', '.jpeg', '.png', '.bmp', '.webp']
+        
+        # 收集需要處理的圖像
+        image_files = []
+        
+        if recursive:
+            # 遞迴處理所有子目錄
+            for root, _, files in os.walk(directory):
+                for file in files:
+                    if any(file.lower().endswith(ext) for ext in supported_formats):
+                        image_files.append(os.path.join(root, file))
+        else:
+            # 只處理當前目錄
+            for file in os.listdir(directory):
+                if os.path.isfile(os.path.join(directory, file)) and any(file.lower().endswith(ext) for ext in supported_formats):
+                    image_files.append(os.path.join(directory, file))
+        
+        if not image_files:
+            return {
+                "success": True,
+                "error": None,
+                "logs": logs + [f"在目錄 '{directory}' 中未找到支援的圖像文件"],
+                "directory": directory,
+                "total_files": 0,
+                "upscaled_files": 0,
+                "skipped_files": 0,
+                "failed_files": 0,
+                "target_size": f"{target_width}x{target_height}",
+                "model": model,
+                "processing_time": 0
+            }
+        
+        logs.append(f"找到 {len(image_files)} 個圖像文件")
+        
+        upscaled_count = 0
+        skipped_count = 0
+        failed_count = 0
+        
+        # 處理每個圖像
+        for img_path in tqdm(image_files, desc="放大圖像"):
+            try:
+                # 打開圖像
+                with Image.open(img_path) as img:
+                    # 確保圖像模式為RGB
+                    if img.mode != 'RGB':
+                        img = img.convert('RGB')
+                        
+                    width, height = img.size
+                    
+                    # 如果設定了最小尺寸閾值，檢查是否需要放大
+                    if min_size > 0 and width >= min_size and height >= min_size:
+                        skipped_count += 1
+                        logs.append(f"跳過 {img_path} (尺寸已足夠: {width}x{height})")
+                        continue
+                    
+                    # 放大並裁剪圖像
+                    upscaled_img = upscale_and_center_crop(
+                        img, 
+                        target_width=target_width, 
+                        target_height=target_height,
+                        model=model
+                    )
+                    
+                    # 保存圖像（覆蓋原圖像）
+                    upscaled_img.save(img_path)
+                    upscaled_count += 1
+                    
+                    logs.append(f"已放大: {os.path.basename(img_path)} ({width}x{height} -> {upscaled_img.size[0]}x{upscaled_img.size[1]})")
+                    
+            except Exception as e:
+                failed_count += 1
+                error_msg = f"處理 {img_path} 時出錯: {str(e)}"
+                logs.append(error_msg)
+        
+        # 計算總處理時間
+        total_time = time.time() - start_time
+        
+        logs.append(f"處理完成: 總文件 {len(image_files)}, 已放大 {upscaled_count}, 跳過 {skipped_count}, 失敗 {failed_count}")
+        logs.append(f"總耗時: {total_time:.2f}秒")
+        
+        return {
+            "success": True,
+            "error": None,
+            "logs": logs,
+            "directory": directory,
+            "total_files": len(image_files),
+            "upscaled_files": upscaled_count,
+            "skipped_files": skipped_count,
+            "failed_files": failed_count,
+            "target_size": f"{target_width}x{target_height}",
+            "model": model,
+            "processing_time": total_time
+        }
+        
+    except Exception as e:
+        error_msg = f"圖像放大處理失敗: {str(e)}"
+        logs.append(error_msg)
+        return {
+            "success": False,
+            "error": error_msg,
+            "logs": logs,
+            "directory": directory,
+            "total_files": 0,
+            "upscaled_files": 0,
+            "skipped_files": 0,
+            "failed_files": 0,
+            "target_size": f"{target_width}x{target_height}",
+            "model": model,
+            "processing_time": 0
+        }
+
 if __name__ == "__main__":
     import argparse
     

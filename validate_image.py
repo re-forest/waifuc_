@@ -10,11 +10,11 @@ def validate_and_remove_invalid_images(directory_path):
         directory_path (str): 圖片目錄路徑
     
     Returns:
-        tuple: 包含處理的總檔案數和刪除的檔案數
+        dict: 包含處理摘要的字典
     """
     if not os.path.isdir(directory_path):
         print(f"錯誤: 目錄 '{directory_path}' 不存在或不是有效目錄")
-        return 0, 0
+        return {"total_files": 0, "removed_files": 0, "error": "目錄不存在或無效"}
         
     files = os.listdir(directory_path)
     removed_count = 0
@@ -34,7 +34,12 @@ def validate_and_remove_invalid_images(directory_path):
                 print(f"已移除 '{filename}': {str(e)}")
     
     print(f"圖片驗證完成，共處理 {len(files)} 張圖片，移除 {removed_count} 張無效圖片")
-    return len(files), removed_count
+    return {
+        "total_files": len(files),
+        "removed_files": removed_count,
+        "valid_files": len(files) - removed_count,
+        "error": None
+    }
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
@@ -49,5 +54,8 @@ if __name__ == "__main__":
         exit(1)
         
     # 執行驗證
-    total, removed = validate_and_remove_invalid_images(directory_path)
-    print(f"驗證完成: 共處理 {total} 個檔案，移除 {removed} 個無效檔案")
+    result = validate_and_remove_invalid_images(directory_path)
+    if result["error"]:
+        print(f"錯誤: {result['error']}")
+    else:
+        print(f"驗證完成: 共處理 {result['total_files']} 個檔案，移除 {result['removed_files']} 個無效檔案")

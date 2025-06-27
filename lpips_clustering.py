@@ -54,6 +54,98 @@ def process_lpips_clustering(file_paths, output_directory="lpips_output", batch_
     print("檔案已根據 LPIPS 結果分類並放入各自的資料夾中。")
     return output_directory
 
+def process_lpips_clustering_with_summary(file_paths, output_directory="lpips_output", batch_size=100):
+    """
+    根據LPIPS聚類結果處理圖像文件並返回詳細摘要
+    
+    Parameters:
+    - file_paths: 圖像文件路徑列表
+    - output_directory: 輸出目錄
+    - batch_size: 批處理大小
+    
+    Returns:
+    - dict: 包含處理結果摘要的字典
+    """
+    logs = []
+    try:
+        # 驗證輸入
+        if not file_paths:
+            return {
+                "success": False,
+                "error": "沒有提供文件路徑",
+                "logs": ["沒有提供文件路徑"],
+                "total_files": 0,
+                "processed_files": 0,
+                "groups_created": 0,
+                "output_directory": None
+            }
+        
+        # 驗證文件是否存在
+        valid_files = []
+        for file_path in file_paths:
+            if os.path.isfile(file_path):
+                valid_files.append(file_path)
+            else:
+                logs.append(f"警告: 文件不存在 - {file_path}")
+        
+        if not valid_files:
+            return {
+                "success": False,
+                "error": "沒有找到有效的圖像文件",
+                "logs": logs,
+                "total_files": len(file_paths),
+                "processed_files": 0,
+                "groups_created": 0,
+                "output_directory": None
+            }
+        
+        logs.append(f"開始處理 {len(valid_files)} 個文件，批次大小: {batch_size}")
+        logs.append(f"輸出目錄: {output_directory}")
+        
+        # 執行LPIPS聚類處理
+        result_dir = process_lpips_clustering(valid_files, output_directory, batch_size)
+        
+        # 統計結果
+        groups_created = 0
+        processed_files = 0
+        
+        if os.path.exists(result_dir):
+            # 計算創建的群組數
+            for item in os.listdir(result_dir):
+                item_path = os.path.join(result_dir, item)
+                if os.path.isdir(item_path) and item.startswith("group_"):
+                    groups_created += 1
+                    # 計算該群組中的文件數
+                    group_files = [f for f in os.listdir(item_path) if os.path.isfile(os.path.join(item_path, f))]
+                    processed_files += len(group_files)
+                    logs.append(f"群組 {item} 包含 {len(group_files)} 個文件")
+        
+        logs.append(f"處理完成，共創建 {groups_created} 個群組，移動 {processed_files} 個文件")
+        
+        return {
+            "success": True,
+            "error": None,
+            "logs": logs,
+            "total_files": len(file_paths),
+            "valid_files": len(valid_files),
+            "processed_files": processed_files,
+            "groups_created": groups_created,
+            "output_directory": result_dir
+        }
+        
+    except Exception as e:
+        error_msg = f"LPIPS聚類處理失敗: {str(e)}"
+        logs.append(error_msg)
+        return {
+            "success": False,
+            "error": error_msg,
+            "logs": logs,
+            "total_files": len(file_paths) if file_paths else 0,
+            "processed_files": 0,
+            "groups_created": 0,
+            "output_directory": None
+        }
+
 if __name__ == "__main__":
     import argparse
     from dotenv import load_dotenv

@@ -113,6 +113,57 @@ def batch_convert_transparent_to_white(results, max_workers=8):
             converted_count += future.result()
     return converted_count
 
+
+def process_transparency(directory_path: str, convert: bool = True, max_workers: int = 8) -> dict:
+    """
+    處理目錄中圖片的透明度，掃描並可選擇轉換透明背景為白色
+    
+    Args:
+        directory_path (str): 圖片目錄路徑
+        convert (bool): 是否轉換透明圖片為白色背景
+        max_workers (int): 線程數
+        
+    Returns:
+        dict: 包含掃描與轉換的完整報告
+    """
+    try:
+        # 掃描目錄
+        results = scan_directory(directory_path, max_workers=max_workers)
+        transparent_count = sum(1 for r in results if r['has_transparency'])
+        total_count = len(results)
+        
+        report = {
+            'total_files': total_count,
+            'transparent_files': transparent_count,
+            'non_transparent_files': total_count - transparent_count,
+            'converted_files': 0,
+            'scan_results': results,
+            'error': None
+        }
+        
+        print(f"圖片總數: {total_count}")
+        print(f"包含透明層的圖片: {transparent_count}")
+        
+        if convert and transparent_count > 0:
+            print(f"發現 {transparent_count} 張含有透明通道的圖片，開始轉換...")
+            converted_count = batch_convert_transparent_to_white(results, max_workers=max_workers)
+            report['converted_files'] = converted_count
+            print(f"已成功轉換 {converted_count} 張圖片的透明背景為白色")
+        elif transparent_count == 0:
+            print("未發現含有透明通道的圖片")
+        
+        return report
+        
+    except Exception as e:
+        return {
+            'total_files': 0,
+            'transparent_files': 0,
+            'non_transparent_files': 0,
+            'converted_files': 0,
+            'scan_results': [],
+            'error': str(e)
+        }
+
 def main():
     load_dotenv()
     root_dir = os.path.dirname(os.path.abspath(__file__))
